@@ -1,0 +1,218 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: qwen2-5-0-5b-instruct
+---
+apiVersion: ome.io/v1beta1
+kind: ClusterBaseModel
+metadata:
+  name: qwen2-5-0-5b-instruct
+spec:
+  modelCapabilities:
+    - TEXT_TO_TEXT
+  vendor: Qwen
+  displayName: Qwen.Qwen2.5-0.5B-Instruct
+  disabled: false
+  version: "1.0.0"
+  storage:
+    storageUri: local:///mnt/data/models/Qwen/Qwen2.5-0.5B-Instruct
+    path: /mnt/data/models/Qwen/Qwen2.5-0.5B-Instruct
+    downloadPolicy: ReuseIfExists
+    nodeSelector:
+      alayajet.io/role: gpu-worker
+---
+apiVersion: ome.io/v1beta1
+kind: ClusterServingRuntime
+metadata:
+  name: sglang-qwen2-5-0-5b-instruct
+spec:
+  disabled: false
+  supportedModelFormats:
+    - modelFramework:
+        name: transformers
+        version: "4.43.1"
+      modelFormat:
+        name: safetensors
+        version: "1.0.0"
+      modelArchitecture: Qwen2ForCausalLM
+      autoSelect: false
+      priority: 1
+  protocolVersions:
+    - openAI
+  modelSizeRange:
+    min: 0.4B
+    max: 1B
+  engineConfig:
+    nodeSelector:
+      alayajet.io/role: gpu-worker
+    runtimeClassName: nvidia
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "8080"
+      prometheus.io/path: /metrics
+    volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+    runner:
+      name: engine
+      image: docker.io/lmsysorg/sglang:v0.5.2-cu126
+      imagePullPolicy: IfNotPresent
+      command:
+        - python3
+        - -m
+        - sglang.launch_server
+        - --host
+        - 0.0.0.0
+        - --port
+        - "8080"
+        - --enable-metrics
+        - --model-path
+        - $(MODEL_PATH)
+        - --tp-size
+        - "1"
+        - --mem-fraction-static
+        - "0.85"
+        - --served-model-name
+        - Qwen/Qwen2.5-0.5B-Instruct
+      ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+      resources:
+        requests:
+          cpu: "8"
+          memory: 16Gi
+          nvidia.com/gpu: "1"
+        limits:
+          cpu: "16"
+          memory: 32Gi
+          nvidia.com/gpu: "1"
+      volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+      startupProbe:
+        httpGet:
+          path: /health_generate
+          port: 8080
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        timeoutSeconds: 10
+        failureThreshold: 60
+      readinessProbe:
+        httpGet:
+          path: /health_generate
+          port: 8080
+        periodSeconds: 15
+        timeoutSeconds: 10
+        failureThreshold: 6
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 8080
+        periodSeconds: 30
+        timeoutSeconds: 10
+        failureThreshold: 5
+  routerConfig:
+    minReplicas: 1
+    maxReplicas: 1
+    nodeSelector:
+      alayajet.io/role: control
+    runner:
+      name: router
+      image: docker.io/lmsysorg/sgl-model-gateway:v0.3.2
+      imagePullPolicy: IfNotPresent
+      command:
+        - python3
+        - -m
+        - sglang_router.launch_router
+        - --host
+        - 0.0.0.0
+        - --port
+        - "8080"
+        - --service-discovery
+        - --service-discovery-namespace
+        - $(NAMESPACE)
+        - --service-discovery-port
+        - "8080"
+        - --selector
+        - component=engine ome.io/inferenceservice=$(INFERENCESERVICE_NAME)
+      env:
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: INFERENCESERVICE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['ome.io/inferenceservice']
+      ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+      resources:
+        requests:
+          cpu: 250m
+          memory: 512Mi
+        limits:
+          cpu: "2"
+          memory: 2Gi
+      startupProbe:
+        httpGet:
+          path: /liveness
+          port: 8080
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 30
+      readinessProbe:
+        httpGet:
+          path: /readiness
+          port: 8080
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 6
+      livenessProbe:
+        httpGet:
+          path: /liveness
+          port: 8080
+        periodSeconds: 30
+        timeoutSeconds: 5
+        failureThreshold: 5
+---
+apiVersion: ome.io/v1beta1
+kind: InferenceService
+metadata:
+  name: qwen2-5-0-5b-instruct
+  namespace: qwen2-5-0-5b-instruct
+spec:
+  model:
+    name: qwen2-5-0-5b-instruct
+    kind: ClusterBaseModel
+  runtime:
+    name: sglang-qwen2-5-0-5b-instruct
+  engine:
+    minReplicas: 2
+    maxReplicas: 2
+  router:
+    minReplicas: 1
+    maxReplicas: 1
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qwen2-5-0-5b-instruct-public
+  namespace: qwen2-5-0-5b-instruct
+spec:
+  type: NodePort
+  selector:
+    component: router
+    ome.io/inferenceservice: qwen2-5-0-5b-instruct
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080

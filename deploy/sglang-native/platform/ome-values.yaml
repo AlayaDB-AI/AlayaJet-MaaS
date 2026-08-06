@@ -1,0 +1,25 @@
+global:
+  hub: ghcr.io/moirai-internal
+
+ome:
+  version: v1.2.1
+  controller:
+    replicaCount: 1
+    nodeSelector:
+      alayajet.io/role: control
+    ingressGateway:
+      disableIngressCreation: true
+      enableGatewayAPI: false
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+
+modelAgent:
+  hostPath: /mnt/data/models
+  gpuNodesOnly: false
+  nodeSelector:
+    alayajet.io/role: gpu-worker

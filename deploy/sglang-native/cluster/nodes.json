@@ -1,0 +1,61 @@
+{
+  "cluster": {
+    "name": "alayajet-sglang-native",
+    "server": "s04",
+    "k3sVersion": "v1.32.9+k3s1",
+    "kubeconfig": ".kube/alayajet-sglang-native.yaml",
+    "apiAddress": "100.64.0.14",
+    "serviceAddress": "100.64.0.14",
+    "serviceNodePort": 30080,
+    "minimumDiskGiB": 80,
+    "minimumNvidiaDriverMajor": 560,
+    "nvidiaContainerToolkitVersion": "1.19.1-1"
+  },
+  "nodes": [
+    {
+      "name": "s07",
+      "enabled": true,
+      "role": "worker",
+      "ssh": "haotian@100.64.0.17",
+      "hostname": "gpu07",
+      "nodeIP": "12.12.12.17",
+      "networkInterface": "ibp65s0f0",
+      "gpu": true,
+      "modelMode": "full",
+      "modelSource": false,
+      "labels": [
+        "alayajet.io/role=gpu-worker"
+      ]
+    },
+    {
+      "name": "s04",
+      "enabled": true,
+      "role": "server",
+      "ssh": "yujun@10.16.71.35",
+      "hostname": "gpu04",
+      "nodeIP": "12.12.12.14",
+      "networkInterface": "ibs18",
+      "gpu": false,
+      "modelMode": "none",
+      "modelSource": false,
+      "labels": [
+        "alayajet.io/role=control"
+      ]
+    },
+    {
+      "name": "s05",
+      "enabled": true,
+      "role": "worker",
+      "ssh": "haotian@100.64.0.15",
+      "hostname": "gpu05",
+      "nodeIP": "12.12.12.15",
+      "networkInterface": "ibs18",
+      "gpu": true,
+      "modelMode": "full",
+      "modelSource": false,
+      "labels": [
+        "alayajet.io/role=gpu-worker"
+      ]
+    }
+  ]
+}
