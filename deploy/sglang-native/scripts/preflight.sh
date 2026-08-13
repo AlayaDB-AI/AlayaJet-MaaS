@@ -8,10 +8,11 @@ minimum_disk_gib=$(cluster_field minimumDiskGiB)
 minimum_disk_kib=$((minimum_disk_gib * 1024 * 1024))
 minimum_driver_major=$(cluster_field minimumNvidiaDriverMajor)
 nvidia_toolkit_version=$(cluster_field nvidiaContainerToolkitVersion)
+runtime_source_path=
 model_source_ready=false
 
 inventory validate
-for command_name in ssh scp rsync curl tar python3 kubectl helm; do
+for command_name in ssh scp rsync curl tar git python3 kubectl helm; do
   command -v "$command_name" >/dev/null || {
     echo "缺少本机命令: $command_name；请先运行 prepare_environment.sh" >&2
     exit 1
@@ -56,6 +57,9 @@ while IFS=$'\t' read -r node_name _; do
   fi
   echo "$NODE_NAME: 部署条件检查通过"
 done < <(inventory nodes --enabled)
+
+runtime_source_path=$(ensure_runtime_source_tree)
+echo "SGLang runtime source ready: $runtime_source_path"
 
 [ "$model_source_ready" = true ] || {
   echo "找不到可用的完整模型源" >&2

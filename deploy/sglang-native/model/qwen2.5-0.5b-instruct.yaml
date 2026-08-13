@@ -58,27 +58,75 @@ spec:
       - name: dshm
         emptyDir:
           medium: Memory
+      - name: sglang-source
+        hostPath:
+          path: __RUNTIME_REPO_TARGET__
+          type: Directory
+      - name: sglang-sandbox
+        hostPath:
+          path: __RUNTIME_SANDBOX_TARGET__
+          type: DirectoryOrCreate
     runner:
       name: engine
-      image: docker.io/lmsysorg/sglang:v0.5.2-cu126
+      image: __RUNTIME_BASE_IMAGE__
       imagePullPolicy: IfNotPresent
       command:
-        - python3
-        - -m
-        - sglang.launch_server
-        - --host
-        - 0.0.0.0
-        - --port
-        - "8080"
-        - --enable-metrics
-        - --model-path
-        - $(MODEL_PATH)
-        - --tp-size
-        - "1"
-        - --mem-fraction-static
-        - "0.85"
-        - --served-model-name
-        - Qwen/Qwen2.5-0.5B-Instruct
+        - bash
+        - -lc
+        - |
+          set -euo pipefail
+          source_dir=/opt/sglang-source
+          sandbox_dir=/opt/sglang-sandbox
+          venv_dir="$sandbox_dir/engine-venv"
+          lock_file="$sandbox_dir/.engine-build.lock"
+          source_revision_file="$source_dir/.alayajet-source-revision"
+          installed_revision_file="$sandbox_dir/.engine-installed-source-revision"
+          install_revision="$(cat "$source_revision_file"):engine-recipe-v4"
+          export PATH="$venv_dir/bin:$PATH"
+
+          ensure_python() {
+            if command -v python3 >/dev/null &&
+              python3 -m venv --help >/dev/null 2>&1 &&
+              command -v ninja >/dev/null &&
+              ldconfig -p 2>/dev/null | grep -q 'libnuma.so.1'; then
+              return
+            fi
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              python3 python3-dev python3-venv python3-pip ca-certificates curl build-essential git libnuma1 util-linux ninja-build
+            rm -rf /var/lib/apt/lists/*
+          }
+
+          ensure_python
+
+          exec 9>"$lock_file"
+          flock 9
+
+          if [ ! -x "$venv_dir/bin/python" ] || [ "$(cat "$installed_revision_file" 2>/dev/null || true)" != "$install_revision" ]; then
+            rm -rf "$venv_dir"
+            python3 -m venv "$venv_dir"
+            "$venv_dir/bin/python" -m pip install --upgrade pip setuptools wheel
+            "$venv_dir/bin/python" -m pip install --no-cache-dir \
+              -e "$source_dir/python[all]" \
+              --extra-index-url https://download.pytorch.org/whl/cu126
+            printf '%s\n' "$install_revision" >"$installed_revision_file"
+          fi
+
+          exec "$venv_dir/bin/python" -m sglang.launch_server \
+            --host 0.0.0.0 \
+            --port 8080 \
+            --enable-metrics \
+            --model-path "${MODEL_PATH}" \
+            --tp-size 1 \
+            --mem-fraction-static 0.85 \
+            --served-model-name Qwen/Qwen2.5-0.5B-Instruct
+      env:
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: "0"
+        - name: CUDA_VISIBLE_DEVICES
+          value: "0"
+        - name: CUDA_DEVICE_ORDER
+          value: PCI_BUS_ID
       ports:
         - name: http
           containerPort: 8080
@@ -87,14 +135,16 @@ spec:
         requests:
           cpu: "8"
           memory: 16Gi
-          nvidia.com/gpu: "1"
         limits:
           cpu: "16"
           memory: 32Gi
-          nvidia.com/gpu: "1"
       volumeMounts:
         - name: dshm
           mountPath: /dev/shm
+        - name: sglang-source
+          mountPath: /opt/sglang-source
+        - name: sglang-sandbox
+          mountPath: /opt/sglang-sandbox
       startupProbe:
         httpGet:
           path: /health_generate
@@ -102,7 +152,7 @@ spec:
         initialDelaySeconds: 10
         periodSeconds: 10
         timeoutSeconds: 10
-        failureThreshold: 60
+        failureThreshold: 180
       readinessProbe:
         httpGet:
           path: /health_generate
@@ -122,25 +172,80 @@ spec:
     maxReplicas: 1
     nodeSelector:
       alayajet.io/role: control
+    volumes:
+      - name: sglang-source
+        hostPath:
+          path: __RUNTIME_REPO_TARGET__
+          type: Directory
+      - name: sglang-sandbox
+        hostPath:
+          path: __RUNTIME_SANDBOX_TARGET__
+          type: DirectoryOrCreate
     runner:
       name: router
-      image: docker.io/lmsysorg/sgl-model-gateway:v0.3.2
+      image: __RUNTIME_ROUTER_BASE_IMAGE__
       imagePullPolicy: IfNotPresent
       command:
-        - python3
-        - -m
-        - sglang_router.launch_router
-        - --host
-        - 0.0.0.0
-        - --port
-        - "8080"
-        - --service-discovery
-        - --service-discovery-namespace
-        - $(NAMESPACE)
-        - --service-discovery-port
-        - "8080"
-        - --selector
-        - component=engine ome.io/inferenceservice=$(INFERENCESERVICE_NAME)
+        - bash
+        - -lc
+        - |
+          set -euo pipefail
+          source_dir=/opt/sglang-source
+          sandbox_dir=/opt/sglang-sandbox
+          venv_dir="$sandbox_dir/router-venv"
+          lock_file="$sandbox_dir/.router-build.lock"
+          source_revision_file="$source_dir/.alayajet-source-revision"
+          installed_revision_file="$sandbox_dir/.router-installed-source-revision"
+          install_revision="$(cat "$source_revision_file"):router-recipe-v4"
+          export PATH="$venv_dir/bin:$PATH"
+
+          ensure_router_build_tools() {
+            if command -v python3 >/dev/null &&
+              python3 -m venv --help >/dev/null 2>&1 &&
+              command -v cargo >/dev/null &&
+              command -v protoc >/dev/null; then
+              return
+            fi
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              python3 python3-dev python3-venv python3-pip ca-certificates curl \
+              build-essential git pkg-config libssl-dev protobuf-compiler libprotobuf-dev util-linux
+            rm -rf /var/lib/apt/lists/*
+            if ! command -v cargo >/dev/null; then
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+                sh -s -- -y --profile minimal
+              . "$HOME/.cargo/env"
+            fi
+          }
+
+          ensure_router_build_tools
+          if [ -f "$HOME/.cargo/env" ]; then
+            . "$HOME/.cargo/env"
+          fi
+
+          exec 9>"$lock_file"
+          flock 9
+
+          if [ ! -x "$venv_dir/bin/python" ] || [ "$(cat "$installed_revision_file" 2>/dev/null || true)" != "$install_revision" ]; then
+            rm -rf "$venv_dir"
+            python3 -m venv "$venv_dir"
+            "$venv_dir/bin/python" -m pip install --upgrade pip setuptools wheel
+            "$venv_dir/bin/python" -m pip install --no-cache-dir \
+              build setuptools-rust wheel \
+              setproctitle requests aiohttp orjson uvicorn fastapi
+            "$venv_dir/bin/python" -m pip install --no-cache-dir "$source_dir/sgl-router"
+            printf '%s\n' "$install_revision" >"$installed_revision_file"
+          fi
+
+          exec "$venv_dir/bin/python" -m sglang_router.launch_router \
+            --host 0.0.0.0 \
+            --port 8080 \
+            --service-discovery \
+            --service-discovery-namespace "${NAMESPACE}" \
+            --service-discovery-port 8080 \
+            --selector \
+            component=engine \
+            "ome.io/inferenceservice=${INFERENCESERVICE_NAME}"
       env:
         - name: NAMESPACE
           valueFrom:
@@ -161,13 +266,18 @@ spec:
         limits:
           cpu: "2"
           memory: 2Gi
+      volumeMounts:
+        - name: sglang-source
+          mountPath: /opt/sglang-source
+        - name: sglang-sandbox
+          mountPath: /opt/sglang-sandbox
       startupProbe:
         httpGet:
           path: /liveness
           port: 8080
         periodSeconds: 10
         timeoutSeconds: 5
-        failureThreshold: 30
+        failureThreshold: 180
       readinessProbe:
         httpGet:
           path: /readiness
@@ -197,6 +307,25 @@ spec:
   engine:
     minReplicas: 2
     maxReplicas: 2
+    nodeSelector:
+      alayajet.io/role: gpu-worker
+    labels:
+      alayajet.io/model-service: qwen2-5-0-5b-instruct
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                alayajet.io/model-service: qwen2-5-0-5b-instruct
+            topologyKey: kubernetes.io/hostname
+    topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            alayajet.io/model-service: qwen2-5-0-5b-instruct
   router:
     minReplicas: 1
     maxReplicas: 1

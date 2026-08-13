@@ -12,7 +12,7 @@ install_local_packages() {
   local missing=()
   local command_name
 
-  for command_name in ssh scp rsync curl tar python3; do
+  for command_name in ssh scp rsync curl tar git python3; do
     command -v "$command_name" >/dev/null || missing+=("$command_name")
   done
   ((${#missing[@]} == 0)) && return
@@ -23,15 +23,15 @@ install_local_packages() {
         NONINTERACTIVE=1 /bin/bash -c \
           "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
       fi
-      brew install openssh rsync curl python
+      brew install openssh rsync curl git python
       ;;
     Linux)
       if command -v apt-get >/dev/null; then
         sudo apt-get update || echo "警告: 部分 APT 软件源刷新失败，将继续验证所需软件包" >&2
         sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y \
-          openssh-client rsync curl tar python3 ca-certificates
+          openssh-client rsync curl tar git python3 ca-certificates
       elif command -v dnf >/dev/null; then
-        sudo dnf install -y openssh-clients rsync curl tar python3 ca-certificates
+        sudo dnf install -y openssh-clients rsync curl tar git python3 ca-certificates
       else
         echo "无法自动安装本机依赖: 不支持的包管理器" >&2
         exit 1

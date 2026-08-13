@@ -9,7 +9,14 @@
     "serviceNodePort": 30080,
     "minimumDiskGiB": 80,
     "minimumNvidiaDriverMajor": 560,
-    "nvidiaContainerToolkitVersion": "1.19.1-1"
+    "nvidiaContainerToolkitVersion": "1.19.1-1",
+    "runtimeSourcePath": "../SGLang",
+    "runtimeGitUrl": "https://github.com/sgl-project/sglang.git",
+    "runtimeGitRef": "v0.5.2",
+    "runtimeRepoTarget": "/mnt/data/repos/SGLang",
+    "runtimeSandboxTarget": "/mnt/data/sandboxes/sglang-native",
+    "runtimeBaseImage": "docker.io/nvidia/cuda:12.6.1-cudnn-devel-ubuntu22.04",
+    "runtimeRouterBaseImage": "docker.io/ubuntu:22.04"
   },
   "nodes": [
     {
