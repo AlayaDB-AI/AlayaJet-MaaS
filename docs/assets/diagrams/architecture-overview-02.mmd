@@ -1,0 +1,21 @@
+flowchart TB
+    Hardware["多机异构算力<br/>CPU · GPU<br/>网络 · 存储"]
+    Inventory["待审核资源清单<br/>逐设备身份 · 类型 · 数量"]
+    Operator(["平台运维人员"])
+    ControlPlane("Control Plane<br/>节点准入")
+    ResourceView["Kubernetes 可部署资源视图<br/>仅包含 active 节点<br/>容量 · 占用 · 拓扑"]
+
+    Hardware -->|"发现与上报"| Inventory
+    Inventory -->|"待审核资源"| ControlPlane
+    Operator -->|"核对与批准"| ControlPlane
+    ControlPlane -->|"标记 active"| ResourceView
+
+    linkStyle 0,1,2,3 stroke:#D97706,stroke-width:3px
+    class Hardware external
+    class Operator operator
+    class ControlPlane platformPod
+    class Inventory,ResourceView k8sResource
+    classDef external fill:#F8FAFC,stroke:#64748B,stroke-width:1.5px,color:#0F172A
+    classDef operator fill:#F3E8FF,stroke:#7C3AED,stroke-width:1.5px,color:#4C1D95
+    classDef platformPod fill:#DBEAFE,stroke:#2563EB,stroke-width:1.5px,color:#172554
+    classDef k8sResource fill:#FEF3C7,stroke:#D97706,stroke-width:1.5px,color:#78350F

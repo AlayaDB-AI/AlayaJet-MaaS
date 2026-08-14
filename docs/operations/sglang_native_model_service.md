@@ -186,30 +186,7 @@ kubectl -n qwen2-5-0-5b-instruct get pods,services -o wide
 
 当前资源关系：
 
-```mermaid
-flowchart LR
-    Config["nodes.json<br/>机器期望态"]
-    Nodes["K3s Nodes<br/>可调度资源"]
-    Model["ClusterBaseModel<br/>模型资产"]
-    Runtime["ClusterServingRuntime<br/>SGLang 运行规格"]
-    Service["InferenceService<br/>发布与副本"]
-    OME["OME Controller<br/>生成工作负载与调度约束"]
-    Workload["Deployment / PodSpec<br/>工作负载期望态"]
-    Scheduler["Kubernetes Scheduler<br/>节点绑定"]
-    Router["Model Gateway<br/>请求选点"]
-    Engines["SGLang Engines<br/>执行推理"]
-
-    Config --> Nodes
-    Model --> Service
-    Runtime --> Service
-    Service --> OME
-    OME --> Workload
-    Workload --> Scheduler
-    Nodes --> Scheduler
-    Scheduler --> Engines
-    OME --> Router
-    Router --> Engines
-```
+![2. 连接和查看集群](../assets/diagrams/operations-sglang-native-model-service-01.svg)
 
 ## 3. 动态管理计算节点
 

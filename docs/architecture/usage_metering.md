@@ -24,20 +24,7 @@
 
 ## 3. 数据流
 
-```mermaid
-flowchart LR
-    Client["上层 MaaS / 业务平台"]
-    Gateway["Gateway Pods<br/>汇总逻辑请求"]
-    Engine["AlayaJet Inference Engine Pods<br/>执行请求"]
-    Metering["Metering Pods<br/>幂等持久化与投递"]
-    Ledger[("最终用量记录<br/>数据库表")]
-
-    Gateway -->|"推理请求"| Engine
-    Engine -->|"Token 与执行事实"| Gateway
-    Gateway -->|"最终用量结果"| Metering
-    Metering --> Ledger
-    Metering -->|"用量事件"| Client
-```
+![3. 数据流](../assets/diagrams/architecture-usage-metering-01.svg)
 
 Engine 不直接向上层发送最终用量，因为它不知道一次逻辑请求是否发生重试、客户端是否中断，以及哪些
 输出 Token 已经真正写入客户端连接。

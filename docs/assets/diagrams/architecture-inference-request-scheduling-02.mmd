@@ -1,0 +1,30 @@
+flowchart LR
+    Client["上层 MaaS / 业务平台"]
+    Gateway["Gateway Pods<br/>协议、身份、转发、流式连接"]
+    Metering["Metering Pods<br/>最终用量"]
+    Controller["Control Plane Pods<br/>Model Service Controller"]
+    Pool{{"InferencePool<br/>候选 Engine endpoints"}}
+    K8s["Kubernetes<br/>Pod 调度与 readiness"]
+
+    subgraph Scheduler["Request Scheduler Pods<br/>EPP implementation"]
+        Queue["Flow Control<br/>优先级与公平队列"]
+        Pipeline["Filter -> Score -> Pick"]
+        State["Endpoint State<br/>负载视图与 KV Index"]
+        Queue --> Pipeline
+        State --> Pipeline
+    end
+
+    EnginePods["AlayaJet Inference Engine Pods<br/>A / B / ... / N"]
+
+    Client -->|"推理请求"| Gateway
+    Gateway -->|"请求上下文 / EPP Protocol"| Queue
+    Pool -.->|"候选 endpoints"| State
+    EnginePods -.->|"负载状态 / KV events"| State
+    Pipeline -->|"primary + fallback endpoint"| Gateway
+    Gateway -->|"直接访问选定 endpoint"| EnginePods
+    EnginePods -->|"流式 / 非流式响应"| Gateway
+    Gateway -->|"最终请求与 Token 事实"| Metering
+
+    Controller -.->|"创建 / 更新"| Pool
+    Controller -.->|"创建 / 更新 Engine 工作负载"| K8s
+    K8s -.->|"Pod 与 readiness"| Pool

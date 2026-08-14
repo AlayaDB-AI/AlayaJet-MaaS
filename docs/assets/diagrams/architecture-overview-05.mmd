@@ -1,0 +1,17 @@
+flowchart TB
+    Engine["SGLang Engine 执行事实"]
+    Gateway("SGLang Model Gateway<br/>汇总逻辑请求")
+    Metering("Metering<br/>持久化最终用量")
+    Consumer["上层 MaaS / 业务平台"]
+
+    Engine -->|"单次执行结果"| Gateway
+    Gateway -->|"请求与 Token 事实"| Metering
+    Metering -->|"用量事件"| Consumer
+
+    linkStyle 0,1,2 stroke:#059669,stroke-width:3px
+    class Engine enginePod
+    class Gateway,Metering platformPod
+    class Consumer external
+    classDef enginePod fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+    classDef platformPod fill:#DBEAFE,stroke:#2563EB,stroke-width:1.5px,color:#172554
+    classDef external fill:#F8FAFC,stroke:#64748B,stroke-width:1.5px,color:#0F172A

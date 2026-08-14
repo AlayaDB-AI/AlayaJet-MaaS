@@ -1,0 +1,23 @@
+flowchart TB
+    Operator(["平台运维人员"])
+    Controller("Control Plane<br/>Model Service Controller")
+    OMEObjects{{"OME Resources<br/>模型服务期望态"}}
+    OME("OME Controller Pods")
+    Kubernetes["Kubernetes<br/>调度 · 运行 · 自愈"]
+    Runtime["Router / Engine<br/>Deployments 与 Pods"]
+    Registry{{"Engine Service / EndpointSlice<br/>Ready Engine endpoints"}}
+
+    Operator -->|"发布 / 暂停 / 恢复"| Controller
+    Controller -->|"创建 / 更新"| OMEObjects
+    OMEObjects -->|"监听"| OME
+    OME -->|"创建 / 更新工作负载"| Kubernetes
+    Kubernetes -->|"调度 / 运行 / 自愈"| Runtime
+    Runtime -.->|"readiness"| Registry
+
+    linkStyle 0,1,2,3,4 stroke:#7C3AED,stroke-width:3px
+    class Operator operator
+    class Controller,OME platformPod
+    class OMEObjects,Kubernetes,Runtime,Registry k8sResource
+    classDef operator fill:#F3E8FF,stroke:#7C3AED,stroke-width:1.5px,color:#4C1D95
+    classDef platformPod fill:#DBEAFE,stroke:#2563EB,stroke-width:1.5px,color:#172554
+    classDef k8sResource fill:#FEF3C7,stroke:#D97706,stroke-width:1.5px,color:#78350F

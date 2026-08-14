@@ -1,0 +1,14 @@
+flowchart LR
+    Client["客户端"]
+    Gateway["Gateway / Envoy"]
+    EPP["llm-d EPP"]
+    Pool["读取 InferencePool<br/>候选实例"]
+    State["读取 KV、队列和负载状态"]
+    Engine["Engine Pod B"]
+
+    Client --> Gateway
+    Gateway -->|"询问：选哪个 Engine？"| EPP
+    EPP --> Pool
+    EPP --> State
+    EPP -.->|"返回 Pod B 地址"| Gateway
+    Gateway -->|"真正转发请求"| Engine

@@ -16,90 +16,7 @@ AlayaJet-MaaS 将多机异构算力转化为模型推理服务。总体架构回
 
 ## 2. 总体架构
 
-```mermaid
-flowchart TB
-    Operator(["平台运维人员"])
-    Client(["OpenAI API Client"])
-
-    subgraph Cluster["OME + SGLang · Kubernetes Cluster"]
-        direction TB
-
-        subgraph LogicalResources["Kubernetes / OME 逻辑资源"]
-            direction LR
-            OMEObjects{{"OME Resources<br/>ClusterBaseModel<br/>ClusterServingRuntime<br/>InferenceService"}}
-            PublicService{{"Public Inference Service<br/>OpenAI-compatible Endpoint"}}
-            EngineRegistry{{"Engine Service / EndpointSlice<br/>Ready Engine endpoints"}}
-        end
-
-        subgraph Nodes["Cluster Nodes"]
-            direction LR
-
-            subgraph ControlNode["Control Plane Node"]
-                direction TB
-                K3s["K3s Server<br/>API · Controller · Scheduler"]
-                OME["OME Controller Pods<br/>模型服务工作负载收敛"]
-                Gateway["SGLang Model Gateway Pods<br/>服务发现 · 健康检查<br/>内置选点 · 请求转发"]
-            end
-
-            subgraph WorkerA["GPU Worker Node A（GPU）"]
-                direction TB
-                AgentA["OME Model Agent Pod"]
-                PluginA["NVIDIA GPU 节点组件 Pod"]
-                EngineA["SGLang Engine Pod"]
-            end
-
-            subgraph WorkerB["GPU Worker Node B（GPU）"]
-                direction TB
-                AgentB["OME Model Agent Pod"]
-                PluginB["NVIDIA GPU 节点组件 Pod"]
-                EngineB["SGLang Engine Pod"]
-            end
-        end
-    end
-
-    Operator -->|"提交 / 更新"| OMEObjects
-    OMEObjects -->|"期望状态"| OME
-    OME -->|"创建 / 更新工作负载"| K3s
-
-    K3s -.->|"调度 / 运行 / 自愈"| Gateway
-    K3s -.->|"调度 / 运行 / 自愈"| EngineA
-    K3s -.->|"调度 / 运行 / 自愈"| EngineB
-
-    AgentA -.->|"模型资产 Ready"| K3s
-    AgentB -.->|"模型资产 Ready"| K3s
-    PluginA -.->|"GPU 资源"| K3s
-    PluginB -.->|"GPU 资源"| K3s
-
-    EngineA -.->|"readiness"| EngineRegistry
-    EngineB -.->|"readiness"| EngineRegistry
-    EngineRegistry -.->|"服务发现"| Gateway
-
-    Client ==>|"OpenAI-compatible 请求"| PublicService
-    PublicService ==> Gateway
-    Gateway ==>|"选择并转发"| EngineA
-    Gateway ==>|"选择并转发"| EngineB
-
-    classDef external fill:#F8FAFC,stroke:#64748B,stroke-width:1.5px,color:#0F172A
-    classDef operator fill:#F3E8FF,stroke:#7C3AED,stroke-width:1.5px,color:#4C1D95
-    classDef controller fill:#EDE9FE,stroke:#7C3AED,stroke-width:1.5px,color:#3B0764
-    classDef gateway fill:#DBEAFE,stroke:#2563EB,stroke-width:2px,color:#172554
-    classDef engine fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
-    classDef resource fill:#FEF3C7,stroke:#D97706,stroke-width:1.5px,color:#78350F
-
-    class Client external
-    class Operator operator
-    class K3s,OME,AgentA,AgentB,PluginA,PluginB controller
-    class Gateway gateway
-    class EngineA,EngineB engine
-    class OMEObjects,PublicService,EngineRegistry resource
-
-    style Cluster fill:#FFFEF0,stroke:#A3A30A,stroke-width:2px
-    style LogicalResources fill:#FFFBEA,stroke:#D97706,stroke-width:1px
-    style Nodes fill:#FFFFFF,stroke:#64748B,stroke-width:1px
-    style ControlNode fill:#FAFAFA,stroke:#374151,stroke-width:2px
-    style WorkerA fill:#FAFAFA,stroke:#374151,stroke-width:2px
-    style WorkerB fill:#FAFAFA,stroke:#374151,stroke-width:2px
-```
+![2. 总体架构](../assets/diagrams/architecture-overview-01.svg)
 
 总图按逻辑角色划分 Control Plane Node 和多个 GPU Worker Node。OME Controller 将模型服务声明收敛为Kubernetes 工作负载；K3s 负责 Pod 调度、运行和自愈；Worker 上的 Model Agent 与 NVIDIA GPU 节点组件分别上报模型资产和 GPU 资源；SGLang Model Gateway 通过 Service/EndpointSlice 发现 Ready Engine，并在内部完成选点和请求转发。具体机器和硬件映射由部署文档维护。
 
@@ -150,29 +67,7 @@ flowchart TB
 
 ### 4.1 关系①：集群当前有多少可用算力
 
-```mermaid
-flowchart TB
-    Hardware["多机异构算力<br/>CPU · GPU<br/>网络 · 存储"]
-    Inventory["待审核资源清单<br/>逐设备身份 · 类型 · 数量"]
-    Operator(["平台运维人员"])
-    ControlPlane("Control Plane<br/>节点准入")
-    ResourceView["Kubernetes 可部署资源视图<br/>仅包含 active 节点<br/>容量 · 占用 · 拓扑"]
-
-    Hardware -->|"发现与上报"| Inventory
-    Inventory -->|"待审核资源"| ControlPlane
-    Operator -->|"核对与批准"| ControlPlane
-    ControlPlane -->|"标记 active"| ResourceView
-
-    linkStyle 0,1,2,3 stroke:#D97706,stroke-width:3px
-    class Hardware external
-    class Operator operator
-    class ControlPlane platformPod
-    class Inventory,ResourceView k8sResource
-    classDef external fill:#F8FAFC,stroke:#64748B,stroke-width:1.5px,color:#0F172A
-    classDef operator fill:#F3E8FF,stroke:#7C3AED,stroke-width:1.5px,color:#4C1D95
-    classDef platformPod fill:#DBEAFE,stroke:#2563EB,stroke-width:1.5px,color:#172554
-    classDef k8sResource fill:#FEF3C7,stroke:#D97706,stroke-width:1.5px,color:#78350F
-```
+![4.1 关系①：集群当前有多少可用算力](../assets/diagrams/architecture-overview-02.svg)
 
 新节点先以待审核状态进入资源清单，由平台运维人员核对 GPU 等资源的类型、数量和逐设备身份。审核通过
 后，节点才进入可部署资源视图。NVIDIA DRA Driver 通过 `ResourceSlice` 发布每张 GPU 的原始型号、
@@ -183,31 +78,7 @@ flowchart TB
 
 ### 4.2 关系②：模型如何部署并保持可用
 
-```mermaid
-flowchart TB
-    Operator(["平台运维人员"])
-    Controller("Control Plane<br/>Model Service Controller")
-    OMEObjects{{"OME Resources<br/>模型服务期望态"}}
-    OME("OME Controller Pods")
-    Kubernetes["Kubernetes<br/>调度 · 运行 · 自愈"]
-    Runtime["Router / Engine<br/>Deployments 与 Pods"]
-    Registry{{"Engine Service / EndpointSlice<br/>Ready Engine endpoints"}}
-
-    Operator -->|"发布 / 暂停 / 恢复"| Controller
-    Controller -->|"创建 / 更新"| OMEObjects
-    OMEObjects -->|"监听"| OME
-    OME -->|"创建 / 更新工作负载"| Kubernetes
-    Kubernetes -->|"调度 / 运行 / 自愈"| Runtime
-    Runtime -.->|"readiness"| Registry
-
-    linkStyle 0,1,2,3,4 stroke:#7C3AED,stroke-width:3px
-    class Operator operator
-    class Controller,OME platformPod
-    class OMEObjects,Kubernetes,Runtime,Registry k8sResource
-    classDef operator fill:#F3E8FF,stroke:#7C3AED,stroke-width:1.5px,color:#4C1D95
-    classDef platformPod fill:#DBEAFE,stroke:#2563EB,stroke-width:1.5px,color:#172554
-    classDef k8sResource fill:#FEF3C7,stroke:#D97706,stroke-width:1.5px,color:#78350F
-```
+![4.2 关系②：模型如何部署并保持可用](../assets/diagrams/architecture-overview-03.svg)
 
 Control Plane 内部的 Model Service Controller 读取发布请求和 Model Service Profile，创建或更新 OME
 Resources；OME Controller 将声明收敛为 Router 与 Engine 工作负载；Kubernetes 负责创建、调度和重建
@@ -221,40 +92,7 @@ Profile、发布请求、Engine 实例、resource request、状态机、暂停�
 
 ### 4.3 关系③：推理请求如何访问模型
 
-```mermaid
-flowchart LR
-    Consumer["上层 MaaS / 业务平台"]
-    Registry{{"Engine Service / EndpointSlice<br/>Ready Engine endpoints"}}
-
-    subgraph GatewayPod["SGLang Model Gateway Pod"]
-        Ingress("OpenAI-compatible API")
-        Discovery("Worker Registry<br/>健康 · 负载 · 缓存视图")
-        Scheduler("Request Scheduler<br/>选择 Engine endpoint")
-        Proxy("请求代理与流式返回")
-
-        Ingress --> Scheduler
-        Discovery --> Scheduler
-        Scheduler -->|"选定 endpoint"| Proxy
-    end
-
-    Engine("SGLang Engine Pod")
-
-    Consumer ==>|"完整推理请求"| Ingress
-    Registry -.->|"服务发现"| Discovery
-    Engine -.->|"健康与负载状态"| Discovery
-    Proxy ==>|"转发请求"| Engine
-    Engine ==>|"流式 / 非流式响应"| Proxy
-    Proxy ==>|"响应"| Consumer
-
-    class Consumer external
-    class Ingress,Discovery,Scheduler,Proxy platformPod
-    class Engine enginePod
-    class Registry k8sResource
-    classDef external fill:#F8FAFC,stroke:#64748B,stroke-width:1.5px,color:#0F172A
-    classDef platformPod fill:#DBEAFE,stroke:#2563EB,stroke-width:1.5px,color:#172554
-    classDef enginePod fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
-    classDef k8sResource fill:#FEF3C7,stroke:#D97706,stroke-width:1.5px,color:#78350F
-```
+![4.3 关系③：推理请求如何访问模型](../assets/diagrams/architecture-overview-04.svg)
 
 每个 SGLang Model Gateway Pod 都维护自己的 Worker Registry、健康、负载和缓存视图。Pod 内部的 Request
 Scheduler 从 Ready Engine endpoints 中选择目标，随后同一个 Gateway Pod 将完整请求转发给对应 Engine
@@ -262,25 +100,7 @@ Pod，并维护流式或非流式响应连接。Router 与 Engine 的发现关�
 
 ### 4.4 关系④：服务用量如何准确记录
 
-```mermaid
-flowchart TB
-    Engine["SGLang Engine 执行事实"]
-    Gateway("SGLang Model Gateway<br/>汇总逻辑请求")
-    Metering("Metering<br/>持久化最终用量")
-    Consumer["上层 MaaS / 业务平台"]
-
-    Engine -->|"单次执行结果"| Gateway
-    Gateway -->|"请求与 Token 事实"| Metering
-    Metering -->|"用量事件"| Consumer
-
-    linkStyle 0,1,2 stroke:#059669,stroke-width:3px
-    class Engine enginePod
-    class Gateway,Metering platformPod
-    class Consumer external
-    classDef enginePod fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
-    classDef platformPod fill:#DBEAFE,stroke:#2563EB,stroke-width:1.5px,color:#172554
-    classDef external fill:#F8FAFC,stroke:#64748B,stroke-width:1.5px,color:#0F172A
-```
+![4.4 关系④：服务用量如何准确记录](../assets/diagrams/architecture-overview-05.svg)
 
 SGLang Engine 提供每次实际执行的 Token、状态和耗时；SGLang Model Gateway 将重试、故障切换、流式
 交付和客户端状态汇总为一个逻辑请求；Metering 将结果持久化，同一用量事件重复提交不会重复记账，并支持

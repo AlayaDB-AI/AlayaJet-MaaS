@@ -1,0 +1,29 @@
+flowchart LR
+    subgraph Control["控制面：OME"]
+        Model["BaseModel<br/>模型资产"]
+        Runtime["ServingRuntime<br/>运行规格"]
+        ISVC["InferenceService<br/>发布配置"]
+        Controller["OME Controller"]
+
+        Model --> ISVC
+        Runtime --> ISVC
+        ISVC --> Controller
+    end
+
+    subgraph Serving["请求面：SGLang"]
+        RouterService["Kubernetes Service<br/>稳定入口"]
+        RouterPod["Router Pod<br/>SGLang Model Gateway"]
+        Engines["SGLang Engine Pods"]
+
+        RouterService --> RouterPod
+        RouterPod -->|"发现并选择 Engine"| Engines
+    end
+
+    Controller -->|"创建并持续维护"| RouterService
+    Controller -->|"创建并持续维护"| RouterPod
+    Controller -->|"创建并持续维护"| Engines
+
+    Client["客户端或 API Gateway"] -->|"OpenAI-compatible API"| RouterService
+    Engines -.->|"流式 Token"| RouterPod
+    RouterPod -.->|"返回响应"| RouterService
+    RouterService -.-> Client

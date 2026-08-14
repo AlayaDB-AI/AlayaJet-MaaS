@@ -1,0 +1,13 @@
+flowchart LR
+    Client["客户端或 API Gateway"]
+    SMG["SGLang Model Gateway"]
+    Discovery["读取 Worker Registry<br/>或 Kubernetes Discovery"]
+    State["读取近似前缀树、<br/>队列和健康状态"]
+    Engine["SGLang Engine Pod B"]
+
+    Client -->|"HTTP/gRPC 请求"| SMG
+    SMG --> Discovery
+    SMG --> State
+    SMG -->|"选择 Engine 并转发原请求"| Engine
+    Engine -.->|"流式 Token"| SMG
+    SMG -.->|"返回响应"| Client

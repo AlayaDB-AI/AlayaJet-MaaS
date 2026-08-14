@@ -1,0 +1,24 @@
+flowchart TB
+    subgraph Gateways["Gateway Pods · active-active"]
+        G1["Gateway 1"]
+        G2["Gateway 2"]
+        G3["Gateway 3 ... 6"]
+    end
+
+    EPP["Pool A EPP Service"]
+
+    subgraph Schedulers["Pool A Request Scheduler Pods"]
+        Active["active<br/>负责选点与排队"]
+        Standby["standby<br/>等待接管"]
+    end
+
+    Lease{{"Kubernetes Lease"}}
+    Pool{{"InferencePool A"}}
+
+    G1 --> EPP
+    G2 --> EPP
+    G3 --> EPP
+    EPP -->|"仅转发到 Ready active"| Active
+    Active -.->|"持有"| Lease
+    Standby -.->|"等待接管"| Lease
+    Active -->|"选择 endpoint"| Pool

@@ -1,0 +1,18 @@
+sequenceDiagram
+    participant Client as 客户应用
+    participant Gateway as Envoy Proxy
+    participant Policy as 鉴权/配额
+    participant Router as SGLang Model Gateway
+    participant A as Engine A
+    participant Metering as Usage Ledger
+
+    Client->>Gateway: model=qwen3-chat, stream=true
+    Gateway->>Policy: API key、tenant、Token 配额
+    Policy-->>Gateway: tenant-a，允许请求
+    Gateway->>Router: 转发 OpenAI-compatible 请求
+    Router->>Router: 健康过滤 -> CacheAware/负载评分 -> 选择 A
+    Router->>A: 代理原始请求
+    A-->>Router: SSE Token 流 + usage
+    Router-->>Gateway: SSE Token 流 + usage
+    Gateway-->>Client: SSE Token 流
+    Gateway->>Metering: 一条最终请求用量事件

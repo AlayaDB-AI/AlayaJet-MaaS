@@ -1,0 +1,18 @@
+flowchart LR
+    Discover["NFD / GFD / DRA / NVML<br/>自动发现"]
+    Admin["平台管理员<br/>补齐未识别字段"]
+    NodeResource["Node Resource<br/>事实 · 配置 · 状态"]
+    InstanceClass["InstanceClass<br/>b300-sxm6-8"]
+    ServingPool["ServingPool<br/>premium-b300"]
+    Profile["Model Service Profile"]
+    Scheduler["Controller + Kubernetes Scheduler"]
+
+    Discover --> NodeResource
+    Admin --> NodeResource
+    Admin --> InstanceClass
+    Admin --> ServingPool
+    NodeResource --> InstanceClass
+    NodeResource --> ServingPool
+    InstanceClass --> Profile
+    ServingPool --> Profile
+    Profile --> Scheduler
