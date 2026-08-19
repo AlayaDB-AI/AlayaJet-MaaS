@@ -1,0 +1,23 @@
+flowchart LR
+    Client["业务调用方"]
+    Gateway["API Gateway<br/>鉴权、限流和计量"]
+
+    subgraph Picker["分离式 Endpoint Picker"]
+        EPP["llm-d / Dynamo EPP<br/>只返回目标 endpoint"]
+        Proxy["Gateway 数据面<br/>转发原请求"]
+    end
+
+    subgraph Integrated["Proxy 与 Router 一体"]
+        SMG["SGLang Model Gateway<br/>选点并代理请求"]
+    end
+
+    EngineA["Engine Pod A"]
+    EngineB["Engine Pod B"]
+
+    Client --> Gateway
+    Gateway --> EPP
+    EPP -.->|"返回 endpoint"| Proxy
+    Gateway --> Proxy
+    Proxy --> EngineA
+    Gateway --> SMG
+    SMG --> EngineB

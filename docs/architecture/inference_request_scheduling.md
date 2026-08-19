@@ -75,32 +75,7 @@ Gateway 与 Request Scheduler 没有固定比例，也不是一一对应：
 
 例如，六个 Gateway Pods 可以共同调用某个 InferencePool 的一组 Scheduler Pods：
 
-```mermaid
-flowchart TB
-    subgraph Gateways["Gateway Pods · active-active"]
-        G1["Gateway 1"]
-        G2["Gateway 2"]
-        G3["Gateway 3 ... 6"]
-    end
-
-    EPP["Pool A EPP Service"]
-
-    subgraph Schedulers["Pool A Request Scheduler Pods"]
-        Active["active<br/>负责选点与排队"]
-        Standby["standby<br/>等待接管"]
-    end
-
-    Lease{{"Kubernetes Lease"}}
-    Pool{{"InferencePool A"}}
-
-    G1 --> EPP
-    G2 --> EPP
-    G3 --> EPP
-    EPP -->|"仅转发到 Ready active"| Active
-    Active -.->|"持有"| Lease
-    Standby -.->|"等待接管"| Lease
-    Active -->|"选择 endpoint"| Pool
-```
+![2.2 Gateway 与 Scheduler 的数量关系](../assets/diagrams/architecture-inference-request-scheduling-01.svg)
 
 同一个 InferencePool 同一时刻只由 active Scheduler 负责选点和排队。Kubernetes Lease 负责主备选举，
 只有 active 副本进入 EPP Service 的 Ready endpoints；standby 持续接收可重建的 Engine 状态，active
@@ -111,38 +86,7 @@ InferencePool 分片，让不同 Scheduler 副本负责不同 Pool，而不是�
 
 ## 3. 总体架构
 
-```mermaid
-flowchart LR
-    Client["上层 MaaS / 业务平台"]
-    Gateway["Gateway Pods<br/>协议、身份、转发、流式连接"]
-    Metering["Metering Pods<br/>最终用量"]
-    Controller["Control Plane Pods<br/>Model Service Controller"]
-    Pool{{"InferencePool<br/>候选 Engine endpoints"}}
-    K8s["Kubernetes<br/>Pod 调度与 readiness"]
-
-    subgraph Scheduler["Request Scheduler Pods<br/>EPP implementation"]
-        Queue["Flow Control<br/>优先级与公平队列"]
-        Pipeline["Filter -> Score -> Pick"]
-        State["Endpoint State<br/>负载视图与 KV Index"]
-        Queue --> Pipeline
-        State --> Pipeline
-    end
-
-    EnginePods["AlayaJet Inference Engine Pods<br/>A / B / ... / N"]
-
-    Client -->|"推理请求"| Gateway
-    Gateway -->|"请求上下文 / EPP Protocol"| Queue
-    Pool -.->|"候选 endpoints"| State
-    EnginePods -.->|"负载状态 / KV events"| State
-    Pipeline -->|"primary + fallback endpoint"| Gateway
-    Gateway -->|"直接访问选定 endpoint"| EnginePods
-    EnginePods -->|"流式 / 非流式响应"| Gateway
-    Gateway -->|"最终请求与 Token 事实"| Metering
-
-    Controller -.->|"创建 / 更新"| Pool
-    Controller -.->|"创建 / 更新 Engine 工作负载"| K8s
-    K8s -.->|"Pod 与 readiness"| Pool
-```
+![3. 总体架构](../assets/diagrams/architecture-inference-request-scheduling-02.svg)
 
 Request Scheduler 是独立的在线决策组件，只返回 primary endpoint、可选 fallback endpoint 或拒绝原因。
 Gateway 获得 endpoint 后直接访问 Engine Pod，并维护完整的请求和响应流。
@@ -165,25 +109,7 @@ Gateway 获得 endpoint 后直接访问 Engine Pod，并维护完整的请求和
 
 ## 5. 在线请求流程
 
-```mermaid
-sequenceDiagram
-    participant C as 上层调用方
-    participant G as Gateway
-    participant S as Request Scheduler (EPP)
-    participant E as Engine Pod
-    participant M as Metering
-
-    C->>G: 标准推理请求
-    G->>G: 身份校验、service_id、priority、request_id
-    G->>S: SchedulingContext
-    S->>S: 排队 -> Filter -> Score -> Pick
-    S-->>G: primary endpoint + fallback endpoint
-    G->>E: 直接发送推理请求
-    E-->>G: 流式或非流式响应
-    G-->>C: 标准响应
-    G->>M: 最终请求与 Token 用量
-    E-->>S: 异步负载状态与 KV Cache 事件
-```
+![5. 在线请求流程](../assets/diagrams/architecture-inference-request-scheduling-03.svg)
 
 流式响应开始后固定在当前 Engine Pod 上完成。只有响应开始前的失败可以使用 fallback endpoint 重试；
 重试必须沿用同一个 `request_id`，并在调度上下文中排除已经失败的 endpoint。

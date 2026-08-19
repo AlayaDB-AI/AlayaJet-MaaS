@@ -1,0 +1,28 @@
+sequenceDiagram
+    participant U as 平台运维人员
+    participant C as Model Service Controller
+    participant G as Gateway
+    participant E as Engine
+    participant O as OME Controller
+    participant K as Kubernetes / kubelet
+
+    U->>C: 暂停 service_id
+    C->>C: 状态置为 draining
+    C->>G: 关闭该服务的新请求准入
+    G-->>C: 在途请求数
+    G->>E: 已接收请求继续执行
+    E-->>G: 返回剩余响应
+    G-->>C: 在途请求数为 0
+    C->>K: 删除 InferenceService
+    K->>O: InferenceService 删除事件
+    O-->>K: 完成资源终结
+    K->>E: preStop + 终止信号
+    C->>C: 状态置为 paused
+
+    U->>C: 恢复 service_id
+    C->>K: 按保留配置创建 InferenceService
+    K->>O: InferenceService 创建事件
+    O->>K: 创建 Router / Engine 工作负载
+    K-->>C: readiness 通过
+    C->>G: 恢复该服务路由
+    C->>C: 状态置为 ready

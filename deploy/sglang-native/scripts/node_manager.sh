@@ -122,6 +122,7 @@ REMOTE
   wait_for_gpu_resource "$NODE_NAME"
 
   if [ "$NODE_MODEL_MODE" != none ]; then
+    "$SCRIPT_DIR/stage_runtime_source.sh" "$NODE_NAME"
     "$SCRIPT_DIR/stage_model.sh" "$NODE_NAME"
   fi
 
@@ -151,7 +152,7 @@ remove_worker() {
   if ssh -n -o BatchMode=yes -o ConnectTimeout=5 "$NODE_SSH" true 2>/dev/null; then
     ssh -n "$NODE_SSH" 'sudo -n systemctl disable --now k3s-agent >/dev/null 2>&1 || true'
   fi
-  echo "$NODE_NAME: 已从集群移除，模型文件和容器镜像保留"
+  echo "$NODE_NAME: 已从集群移除，模型文件和源码沙箱保留"
 }
 
 reconcile_workers() {

@@ -13,9 +13,7 @@ MODEL=Qwen/Qwen2.5-0.5B-Instruct
 export KUBECONFIG=$KUBECONFIG_PATH
 
 kubectl get nodes
-kubectl -n qwen2-5-0-5b-instruct wait \
-  --for=condition=Ready inferenceservice/qwen2-5-0-5b-instruct \
-  --timeout=10m
+wait_for_inferenceservice_ready qwen2-5-0-5b-instruct qwen2-5-0-5b-instruct 600
 kubectl -n qwen2-5-0-5b-instruct wait \
   --for=condition=Ready pod -l component=engine \
   --timeout=10m

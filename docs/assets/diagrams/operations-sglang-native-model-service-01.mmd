@@ -1,0 +1,22 @@
+flowchart LR
+    Config["nodes.json<br/>机器期望态"]
+    Nodes["K3s Nodes<br/>可调度资源"]
+    Model["ClusterBaseModel<br/>模型资产"]
+    Runtime["ClusterServingRuntime<br/>SGLang 运行规格"]
+    Service["InferenceService<br/>发布与副本"]
+    OME["OME Controller<br/>生成工作负载与调度约束"]
+    Workload["Deployment / PodSpec<br/>工作负载期望态"]
+    Scheduler["Kubernetes Scheduler<br/>节点绑定"]
+    Router["Model Gateway<br/>请求选点"]
+    Engines["SGLang Engines<br/>执行推理"]
+
+    Config --> Nodes
+    Model --> Service
+    Runtime --> Service
+    Service --> OME
+    OME --> Workload
+    Workload --> Scheduler
+    Nodes --> Scheduler
+    Scheduler --> Engines
+    OME --> Router
+    Router --> Engines

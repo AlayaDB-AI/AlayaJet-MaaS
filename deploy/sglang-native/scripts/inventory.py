@@ -47,6 +47,13 @@ def validate_inventory(inventory: dict) -> None:
         "minimumDiskGiB",
         "minimumNvidiaDriverMajor",
         "nvidiaContainerToolkitVersion",
+        "runtimeSourcePath",
+        "runtimeGitUrl",
+        "runtimeGitRef",
+        "runtimeRepoTarget",
+        "runtimeSandboxTarget",
+        "runtimeBaseImage",
+        "runtimeRouterBaseImage",
     )
     for field in required_cluster_fields:
         if field not in cluster:
@@ -60,6 +67,13 @@ def validate_inventory(inventory: dict) -> None:
         "apiAddress",
         "serviceAddress",
         "nvidiaContainerToolkitVersion",
+        "runtimeSourcePath",
+        "runtimeGitUrl",
+        "runtimeGitRef",
+        "runtimeRepoTarget",
+        "runtimeSandboxTarget",
+        "runtimeBaseImage",
+        "runtimeRouterBaseImage",
     )
     for field in string_cluster_fields:
         if not isinstance(cluster[field], str) or not cluster[field]:

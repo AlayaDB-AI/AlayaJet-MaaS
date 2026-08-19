@@ -1,0 +1,82 @@
+flowchart TB
+    Operator(["平台运维人员"])
+    Client(["OpenAI API Client"])
+
+    subgraph Cluster["OME + SGLang · Kubernetes Cluster"]
+        direction TB
+
+        subgraph LogicalResources["Kubernetes / OME 逻辑资源"]
+            direction LR
+            OMEObjects{{"OME Resources<br/>ClusterBaseModel<br/>ClusterServingRuntime<br/>InferenceService"}}
+            PublicService{{"Public Inference Service<br/>OpenAI-compatible Endpoint"}}
+            EngineRegistry{{"Engine Service / EndpointSlice<br/>Ready Engine endpoints"}}
+        end
+
+        subgraph Nodes["Cluster Nodes"]
+            direction LR
+
+            subgraph ControlNode["Control Plane Node"]
+                direction TB
+                K3s["K3s Server<br/>API · Controller · Scheduler"]
+                OME["OME Controller Pods<br/>模型服务工作负载收敛"]
+                Gateway["SGLang Model Gateway Pods<br/>服务发现 · 健康检查<br/>内置选点 · 请求转发"]
+            end
+
+            subgraph WorkerA["GPU Worker Node A（GPU）"]
+                direction TB
+                AgentA["OME Model Agent Pod"]
+                PluginA["NVIDIA GPU 节点组件 Pod"]
+                EngineA["SGLang Engine Pod"]
+            end
+
+            subgraph WorkerB["GPU Worker Node B（GPU）"]
+                direction TB
+                AgentB["OME Model Agent Pod"]
+                PluginB["NVIDIA GPU 节点组件 Pod"]
+                EngineB["SGLang Engine Pod"]
+            end
+        end
+    end
+
+    Operator -->|"提交 / 更新"| OMEObjects
+    OMEObjects -->|"期望状态"| OME
+    OME -->|"创建 / 更新工作负载"| K3s
+
+    K3s -.->|"调度 / 运行 / 自愈"| Gateway
+    K3s -.->|"调度 / 运行 / 自愈"| EngineA
+    K3s -.->|"调度 / 运行 / 自愈"| EngineB
+
+    AgentA -.->|"模型资产 Ready"| K3s
+    AgentB -.->|"模型资产 Ready"| K3s
+    PluginA -.->|"GPU 资源"| K3s
+    PluginB -.->|"GPU 资源"| K3s
+
+    EngineA -.->|"readiness"| EngineRegistry
+    EngineB -.->|"readiness"| EngineRegistry
+    EngineRegistry -.->|"服务发现"| Gateway
+
+    Client ==>|"OpenAI-compatible 请求"| PublicService
+    PublicService ==> Gateway
+    Gateway ==>|"选择并转发"| EngineA
+    Gateway ==>|"选择并转发"| EngineB
+
+    classDef external fill:#F8FAFC,stroke:#64748B,stroke-width:1.5px,color:#0F172A
+    classDef operator fill:#F3E8FF,stroke:#7C3AED,stroke-width:1.5px,color:#4C1D95
+    classDef controller fill:#EDE9FE,stroke:#7C3AED,stroke-width:1.5px,color:#3B0764
+    classDef gateway fill:#DBEAFE,stroke:#2563EB,stroke-width:2px,color:#172554
+    classDef engine fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+    classDef resource fill:#FEF3C7,stroke:#D97706,stroke-width:1.5px,color:#78350F
+
+    class Client external
+    class Operator operator
+    class K3s,OME,AgentA,AgentB,PluginA,PluginB controller
+    class Gateway gateway
+    class EngineA,EngineB engine
+    class OMEObjects,PublicService,EngineRegistry resource
+
+    style Cluster fill:#FFFEF0,stroke:#A3A30A,stroke-width:2px
+    style LogicalResources fill:#FFFBEA,stroke:#D97706,stroke-width:1px
+    style Nodes fill:#FFFFFF,stroke:#64748B,stroke-width:1px
+    style ControlNode fill:#FAFAFA,stroke:#374151,stroke-width:2px
+    style WorkerA fill:#FAFAFA,stroke:#374151,stroke-width:2px
+    style WorkerB fill:#FAFAFA,stroke:#374151,stroke-width:2px

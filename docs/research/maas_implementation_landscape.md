@@ -116,41 +116,11 @@ llm-d EPP 是逐请求的 Endpoint Picker。Gateway 接收客户端请求，向 
 根据 `InferencePool` 中的候选实例以及 KV、队列和负载状态完成选点，再由 Gateway 将原请求直接转发
 给选中的 Engine：
 
-```mermaid
-flowchart LR
-    Client["客户端"]
-    Gateway["Gateway / Envoy"]
-    EPP["llm-d EPP"]
-    Pool["读取 InferencePool<br/>候选实例"]
-    State["读取 KV、队列和负载状态"]
-    Engine["Engine Pod B"]
-
-    Client --> Gateway
-    Gateway -->|"询问：选哪个 Engine？"| EPP
-    EPP --> Pool
-    EPP --> State
-    EPP -.->|"返回 Pod B 地址"| Gateway
-    Gateway -->|"真正转发请求"| Engine
-```
+![2.4.1 KServe + llm-d](../assets/diagrams/research-maas-implementation-landscape-01.svg)
 
 同一链路的逐步请求时序如下：
 
-```mermaid
-sequenceDiagram
-    participant Client as 客户端
-    participant Gateway as Gateway / Envoy
-    participant EPP as llm-d EPP
-    participant Engine as Engine Pod B
-
-    Client->>Gateway: Chat Completions 请求
-    Gateway->>EPP: 候选 Engine + 请求内容
-    Note over EPP: 读取 InferencePool、KV、队列和负载状态
-    EPP->>EPP: Filter → Score → Pick
-    EPP-->>Gateway: 返回 Engine Pod B 地址
-    Gateway->>Engine: 转发原始请求
-    Engine-->>Gateway: 流式 Token
-    Gateway-->>Client: 流式 Token
-```
+![2.4.1 KServe + llm-d](../assets/diagrams/research-maas-implementation-landscape-02.svg)
 
 #### 2.4.2 OME + SGLang
 
@@ -182,56 +152,12 @@ Client or API Gateway
 OME 负责把模型服务声明收敛为 Router 与 Engine 工作负载，SGLang Model Gateway 负责运行时的
 Engine 发现、选点和请求代理：
 
-```mermaid
-flowchart LR
-    subgraph Control["控制面：OME"]
-        Model["BaseModel<br/>模型资产"]
-        Runtime["ServingRuntime<br/>运行规格"]
-        ISVC["InferenceService<br/>发布配置"]
-        Controller["OME Controller"]
-
-        Model --> ISVC
-        Runtime --> ISVC
-        ISVC --> Controller
-    end
-
-    subgraph Serving["请求面：SGLang"]
-        RouterService["Kubernetes Service<br/>稳定入口"]
-        RouterPod["Router Pod<br/>SGLang Model Gateway"]
-        Engines["SGLang Engine Pods"]
-
-        RouterService --> RouterPod
-        RouterPod -->|"发现并选择 Engine"| Engines
-    end
-
-    Controller -->|"创建并持续维护"| RouterService
-    Controller -->|"创建并持续维护"| RouterPod
-    Controller -->|"创建并持续维护"| Engines
-
-    Client["客户端或 API Gateway"] -->|"OpenAI-compatible API"| RouterService
-    Engines -.->|"流式 Token"| RouterPod
-    RouterPod -.->|"返回响应"| RouterService
-    RouterService -.-> Client
-```
+![2.4.2 OME + SGLang](../assets/diagrams/research-maas-implementation-landscape-03.svg)
 
 SGLang Model Gateway 直接接收上游请求，在同一个组件内完成 Worker 发现、状态判断、Engine
 选择和请求代理：
 
-```mermaid
-flowchart LR
-    Client["客户端或 API Gateway"]
-    SMG["SGLang Model Gateway"]
-    Discovery["读取 Worker Registry<br/>或 Kubernetes Discovery"]
-    State["读取近似前缀树、<br/>队列和健康状态"]
-    Engine["SGLang Engine Pod B"]
-
-    Client -->|"HTTP/gRPC 请求"| SMG
-    SMG --> Discovery
-    SMG --> State
-    SMG -->|"选择 Engine 并转发原请求"| Engine
-    Engine -.->|"流式 Token"| SMG
-    SMG -.->|"返回响应"| Client
-```
+![2.4.2 OME + SGLang](../assets/diagrams/research-maas-implementation-landscape-04.svg)
 
 #### 2.4.3 NVIDIA Dynamo
 
@@ -269,27 +195,7 @@ Dynamo 支持[两种请求入口拓扑](https://docs.nvidia.com/dynamo/latest/ku
 
 GAIE 模式的请求关系如下：
 
-```mermaid
-flowchart LR
-    Client["客户端"]
-    Gateway["Kubernetes Gateway"]
-    EPP["Dynamo EPP"]
-    Pool["InferencePool<br/>候选 Worker Pods"]
-    State["Dynamo Discovery + Event Plane<br/>Worker 角色、KV 和负载"]
-    Sidecar["Worker B Frontend sidecar<br/>direct 模式"]
-    Worker["Dynamo Worker B"]
-
-    Client --> Gateway
-    Gateway -->|"询问：选哪个 Worker？"| EPP
-    EPP --> Pool
-    EPP --> State
-    EPP -.->|"返回 Worker B"| Gateway
-    Gateway -->|"转发原请求"| Sidecar
-    Sidecar -->|"direct 转发"| Worker
-    Worker -.->|"流式 Token"| Sidecar
-    Sidecar -.->|"返回响应"| Gateway
-    Gateway -.-> Client
-```
+![2.4.3 NVIDIA Dynamo](../assets/diagrams/research-maas-implementation-landscape-05.svg)
 
 Dynamo Operator 根据 `DynamoGraphDeployment` 创建 EPP、`InferencePool`、Frontend sidecar 和
 Worker；Dynamo EPP 通过 NATS Core 事件面消费实时路由状态。Worker 能发布 KV events 时使用事件驱动的
@@ -775,30 +681,7 @@ profile_ref: qwen3-235b-h200-v1
 engine_instances: 2
 ```
 
-```mermaid
-sequenceDiagram
-    participant Customer as 客户
-    participant API as MaaS Management API
-    participant Compiler as Profile Compiler
-    participant OME as OME Controller
-    participant K8s as Kubernetes
-    participant Engine as SGLang Engine Pods
-    participant Router as SGLang Model Gateway
-    participant Gateway as Envoy AI Gateway
-
-    Customer->>API: 购买 qwen3-chat 预留容量
-    API->>API: 根据 model + capacity + SLA 选择 Profile 和实例数
-    API->>Compiler: 创建 service revision r17
-    Compiler->>OME: ClusterBaseModel + ClusterServingRuntime + InferenceService
-    Compiler->>Gateway: service_id 路由 + 容量策略
-    OME->>K8s: Engine Deployment + Router Deployment/Service
-    K8s->>Engine: 分配 16 张 H200，启动 2 个 Engine
-    K8s->>Router: 启动 SGLang Model Gateway
-    Engine-->>K8s: 模型校验和 readiness 通过
-    Router-->>OME: 发现 2 个 Ready Workers
-    OME-->>API: InferenceService Ready
-    API-->>Customer: endpoint + API key + SLA
-```
+![3.8.1 发布链路：从客户订单到 Ready API](../assets/diagrams/research-maas-implementation-landscape-06.svg)
 
 内部对象的对应关系是：
 
@@ -835,26 +718,7 @@ curl https://api.maas.example/v1/chat/completions \
   }'
 ```
 
-```mermaid
-sequenceDiagram
-    participant Client as 客户应用
-    participant Gateway as Envoy Proxy
-    participant Policy as 鉴权/配额
-    participant Router as SGLang Model Gateway
-    participant A as Engine A
-    participant Metering as Usage Ledger
-
-    Client->>Gateway: model=qwen3-chat, stream=true
-    Gateway->>Policy: API key、tenant、Token 配额
-    Policy-->>Gateway: tenant-a，允许请求
-    Gateway->>Router: 转发 OpenAI-compatible 请求
-    Router->>Router: 健康过滤 -> CacheAware/负载评分 -> 选择 A
-    Router->>A: 代理原始请求
-    A-->>Router: SSE Token 流 + usage
-    Router-->>Gateway: SSE Token 流 + usage
-    Gateway-->>Client: SSE Token 流
-    Gateway->>Metering: 一条最终请求用量事件
-```
+![3.8.2 请求链路：一次 Chat 请求如何选中 Engine](../assets/diagrams/research-maas-implementation-landscape-07.svg)
 
 假设 SGLang Model Gateway 看到的状态如下：
 
@@ -1083,31 +947,7 @@ Controller 为准。
 LLM 请求持续时间、KV Cache、上下文长度和队列差异会让普通 Service 分发产生热点。生产实现通常在
 Engine 前增加能够感知 Prefix/KV、队列、负载和 P/D 角色的 Router。该 Router 有两种主要形态：
 
-```mermaid
-flowchart LR
-    Client["业务调用方"]
-    Gateway["API Gateway<br/>鉴权、限流和计量"]
-
-    subgraph Picker["分离式 Endpoint Picker"]
-        EPP["llm-d / Dynamo EPP<br/>只返回目标 endpoint"]
-        Proxy["Gateway 数据面<br/>转发原请求"]
-    end
-
-    subgraph Integrated["Proxy 与 Router 一体"]
-        SMG["SGLang Model Gateway<br/>选点并代理请求"]
-    end
-
-    EngineA["Engine Pod A"]
-    EngineB["Engine Pod B"]
-
-    Client --> Gateway
-    Gateway --> EPP
-    EPP -.->|"返回 endpoint"| Proxy
-    Gateway --> Proxy
-    Proxy --> EngineA
-    Gateway --> SMG
-    SMG --> EngineB
-```
+![4.4 推理感知 Router 进入核心请求路径](../assets/diagrams/research-maas-implementation-landscape-08.svg)
 
 llm-d EPP 和 Dynamo EPP 只执行选点，由 Gateway 数据面转发原请求；SGLang Model Gateway 同时完成
 Worker 发现、选点和请求代理。Controller 不在请求路径中，只负责事先维护 Router 和 Engine 工作负载。
@@ -1145,17 +985,7 @@ Inference Engine 只知道一次物理执行，Gateway 才能看到租户上下�
 
 “分布式资源管理”至少包含四个不同问题，不能只按项目名称横向比较：
 
-```mermaid
-flowchart TB
-    Platform["平台资源底座<br/>节点 · CPU/GPU · 网络 · 存储 · 工作负载生命周期"]
-    Admission["集群级准入与队列<br/>配额 · 公平共享 · Gang · 抢占 · Backfill"]
-    Runtime["分布式应用运行时<br/>Actor/Task · Placement Group · 跨节点执行"]
-    Request["在线请求调度<br/>队列 · KV/Prefix · Engine 负载 · Endpoint 选择"]
-
-    Platform --> Admission
-    Admission --> Runtime
-    Runtime --> Request
-```
+![5.1 先区分四个调度层](../assets/diagrams/research-maas-implementation-landscape-09.svg)
 
 | 层次 | 主要候选 | 负责什么 |
 | --- | --- | --- |

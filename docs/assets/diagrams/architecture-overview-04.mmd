@@ -1,0 +1,32 @@
+flowchart LR
+    Consumer["上层 MaaS / 业务平台"]
+    Registry{{"Engine Service / EndpointSlice<br/>Ready Engine endpoints"}}
+
+    subgraph GatewayPod["SGLang Model Gateway Pod"]
+        Ingress("OpenAI-compatible API")
+        Discovery("Worker Registry<br/>健康 · 负载 · 缓存视图")
+        Scheduler("Request Scheduler<br/>选择 Engine endpoint")
+        Proxy("请求代理与流式返回")
+
+        Ingress --> Scheduler
+        Discovery --> Scheduler
+        Scheduler -->|"选定 endpoint"| Proxy
+    end
+
+    Engine("SGLang Engine Pod")
+
+    Consumer ==>|"完整推理请求"| Ingress
+    Registry -.->|"服务发现"| Discovery
+    Engine -.->|"健康与负载状态"| Discovery
+    Proxy ==>|"转发请求"| Engine
+    Engine ==>|"流式 / 非流式响应"| Proxy
+    Proxy ==>|"响应"| Consumer
+
+    class Consumer external
+    class Ingress,Discovery,Scheduler,Proxy platformPod
+    class Engine enginePod
+    class Registry k8sResource
+    classDef external fill:#F8FAFC,stroke:#64748B,stroke-width:1.5px,color:#0F172A
+    classDef platformPod fill:#DBEAFE,stroke:#2563EB,stroke-width:1.5px,color:#172554
+    classDef enginePod fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+    classDef k8sResource fill:#FEF3C7,stroke:#D97706,stroke-width:1.5px,color:#78350F

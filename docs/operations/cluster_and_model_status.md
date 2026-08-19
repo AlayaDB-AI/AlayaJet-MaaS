@@ -62,6 +62,11 @@ kubectl -n "$OME_MODEL_NS" get deployment,pod,service -o wide
 `node_manager.sh status` 查看节点配置期望态和 Kubernetes 实际状态；`verify.sh` 还会发送模型发现、非流式
 和流式推理请求。
 
+`verify.sh` 检查 `InferenceService` 时直接读取
+`.status.conditions[?(@.type=="Ready")].status`，读到 `True` 后继续。排查 OME
+`InferenceService` 时也优先使用这种 jsonpath 检查，不要把 `kubectl wait inferenceservice/...` 作为唯一
+判断依据。
+
 ## 3. 查看集群和 GPU 资源
 
 查看节点状态、地址和角色：
@@ -139,7 +144,7 @@ kubectl get clusterservingruntime
 kubectl get clusterbasemodel "$OME_BASE_MODEL" -o yaml
 ```
 
-查看当前 SGLang Runtime，包括镜像、参数、GPU 请求和放置约束：
+查看当前 SGLang Runtime，包括基础镜像、源码挂载、沙箱挂载、参数、GPU 请求和放置约束：
 
 ```bash
 kubectl get clusterservingruntime "$OME_RUNTIME" -o yaml
@@ -174,6 +179,15 @@ kubectl -n "$OME_MODEL_NS" get \
 kubectl -n "$OME_MODEL_NS" get \
   inferenceservice "$OME_MODEL_SERVICE" \
   -o jsonpath='{range .status.conditions[*]}{.type}={.status}{"  reason="}{.reason}{"\n"}{end}'
+```
+
+等待 Ready 时使用与脚本相同的轮询方式：
+
+```bash
+until [ "$(kubectl -n "$OME_MODEL_NS" get inferenceservice "$OME_MODEL_SERVICE" \
+  -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = True ]; do
+  sleep 5
+done
 ```
 
 查看 Controller 写入的事件和状态说明：
@@ -228,7 +242,7 @@ kubectl -n "$OME_MODEL_NS" get events \
   tail -n 30
 ```
 
-查看 Engine 调度、镜像、启动和探针事件：
+查看 Engine 调度、基础镜像、源码沙箱启动和探针事件：
 
 ```bash
 kubectl -n "$OME_MODEL_NS" describe pod \
@@ -599,6 +613,7 @@ ls -lah /mnt/data/models/Qwen/Qwen2.5-0.5B-Instruct
 | 节点没有 `nvidia.com/gpu` | NVIDIA Driver、NVIDIA Device Plugin 和节点污点 |
 | `ClusterBaseModel` 未就绪 | 模型目录、文件权限、Model Agent Pod 和节点模型标签 |
 | `InferenceService` 未就绪 | InferenceService Conditions、namespace Events 和 OME Controller 日志 |
+| `kubectl wait inferenceservice` 超时但手工看到 `READY=True` | 改用 jsonpath 读取 Ready condition；`deploy_model.sh` 和 `verify.sh` 已使用该轮询方式 |
 | Engine Pod 为 `Pending` | GPU 数量、cordon、nodeSelector、affinity 和 topology spread |
 | Engine Pod 反复重启 | Engine 日志、启动参数、模型路径、显存和健康探针 |
 | API 请求失败 | NodePort Service、Router 日志、Ready Engine endpoints 和 Engine 日志 |

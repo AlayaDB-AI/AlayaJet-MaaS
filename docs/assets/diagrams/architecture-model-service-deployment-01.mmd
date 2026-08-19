@@ -1,0 +1,15 @@
+sequenceDiagram
+    participant O as 平台运维人员
+    participant C as Model Service Controller
+    participant K as Kubernetes
+    participant E as Engine Pods
+    participant P as InferencePool
+
+    O->>C: service_id + profile_ref + engine_instances
+    C->>C: 读取并校验 Profile
+    C->>K: 创建或更新 ResourceClaimTemplate 与 Deployment
+    C->>P: 创建或更新 InferencePool
+    K->>E: 调度并启动 Engine Pods
+    E->>E: 加载模型并执行 readiness
+    K-->>P: 汇聚 Ready endpoints
+    C-->>O: 发布状态

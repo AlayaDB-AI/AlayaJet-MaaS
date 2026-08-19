@@ -12,100 +12,7 @@ K3s 集群。集群由一台 Server 主机和一台或多台 GPU Worker 主机�
 
 ## 系统架构与部署边界
 
-```mermaid
-flowchart LR
-    Client(["OpenAI API Client"])
-
-    subgraph Management["管理机 · 运维工作站"]
-        direction TB
-        Repo["AlayaJet-MaaS 仓库<br/>部署与运维脚本"]
-        Kubeconfig["管理用 kubeconfig<br/>~/.kube/alayajet-sglang-native.yaml"]
-        AdminTools["SSH · kubectl · Helm"]
-        Repo --> AdminTools
-        Kubeconfig --> AdminTools
-    end
-
-    subgraph S04["s04 · Control Plane"]
-        direction TB
-        subgraph ControlPlane["控制面"]
-            API(["K3s API Server"])
-            OME(["OME Controller"])
-            ReplicaController(["Deployment Controller / HPA"])
-            Scheduler(["Kubernetes Scheduler"])
-            Kubelet04(["Kubelet"])
-            Model["ClusterBaseModel"]
-            Runtime["ClusterServingRuntime"]
-            ISVC["InferenceService"]
-            Workload["Deployment / Service 期望态"]
-
-            Model -->|"引用模型资产"| ISVC
-            Runtime -->|"引用运行规格"| ISVC
-            ISVC -->|"提交服务与放置期望"| API
-            API -->|"期望态事件"| OME
-            OME -->|"生成含调度约束的工作负载"| Workload
-            Workload -->|"提交资源对象"| API
-            API -->|"资源变更事件"| ReplicaController
-            ReplicaController -->|"生成带调度约束的 Pod"| Scheduler
-        end
-
-        subgraph RequestPlane["请求面"]
-            PublicService{{"NodePort Service<br/>100.64.0.14:30080"}}
-            Router{{"SGLang Model Gateway"}}
-            PublicService ==> Router
-        end
-    end
-
-    subgraph S05["s05 · GPU Worker（NVIDIA A10）"]
-        direction TB
-        Agent05(["OME Model Agent"])
-        Kubelet05(["Kubelet"])
-        EngineEndpoint05{{"Ready Engine Endpoint"}}
-        Engine05["SGLang Engine"]
-        Kubelet05 -.->|"启动并维持"| Engine05
-        EngineEndpoint05 ==> Engine05
-    end
-
-    subgraph S07["s07 · GPU Worker（RTX 4090 × 2）"]
-        direction TB
-        Agent07(["OME Model Agent"])
-        Kubelet07(["Kubelet"])
-        EngineEndpoint07{{"Ready Engine Endpoint"}}
-        Engine07["SGLang Engine"]
-        Kubelet07 -.->|"启动并维持"| Engine07
-        EngineEndpoint07 ==> Engine07
-    end
-
-    Client ==> PublicService
-    AdminTools -->|"Kubernetes API :6443"| API
-    Router ==>|"服务发现与请求转发"| EngineEndpoint05
-    Router ==>|"服务发现与请求转发"| EngineEndpoint07
-
-    Scheduler -.->|"绑定 Router Pod"| Kubelet04
-    Kubelet04 -.->|"启动并维持"| Router
-    Scheduler -.->|"绑定 Pod 到 s05"| Kubelet05
-    Scheduler -.->|"绑定 Pod 到 s07"| Kubelet07
-    Agent05 -.->|"模型资产 Ready 标签"| API
-    Agent07 -.->|"模型资产 Ready 标签"| API
-
-    classDef client fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#0c4a6e
-    classDef controller fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#3b0764
-    classDef declaration fill:#ffffff,stroke:#7c3aed,stroke-width:1px,color:#3b0764
-    classDef router fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#78350f
-    classDef engine fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d
-
-    class Client,Repo,Kubeconfig,AdminTools client
-    class API,OME,ReplicaController,Scheduler,Kubelet04,Agent05,Agent07,Kubelet05,Kubelet07 controller
-    class Model,Runtime,ISVC,Workload declaration
-    class PublicService,Router,EngineEndpoint05,EngineEndpoint07 router
-    class Engine05,Engine07 engine
-
-    style S04 fill:#fafafa,stroke:#374151,stroke-width:2px
-    style S05 fill:#fafafa,stroke:#374151,stroke-width:2px
-    style S07 fill:#fafafa,stroke:#374151,stroke-width:2px
-    style Management fill:#eff6ff,stroke:#0284c7,stroke-width:2px
-    style ControlPlane fill:#f5f3ff,stroke:#a78bfa,stroke-width:1px
-    style RequestPlane fill:#fffbeb,stroke:#f59e0b,stroke-width:1px
-```
+![系统架构与部署边界](../assets/diagrams/deployment-sglang-native-01.svg)
 
 图中粗实线是推理请求路径，细实线是 OME 声明与控制关系，虚线是 Kubernetes 资源收敛和节点状态
 上报。OME Controller 将模型服务的节点选择、亲和性和拓扑分布要求写入工作负载；Kubernetes Scheduler
@@ -239,79 +146,7 @@ echo
 
 ## 1. 部署流程
 
-```mermaid
-flowchart TD
-    Config@{ shape: doc, label: "配置文件<br/>nodes.json<br/>声明 Server、Worker 与 enabled 状态" }
-
-    Deploy@{ shape: rect, label: "部署脚本<br/>bootstrap_cluster.sh" }
-    Reconcile@{ shape: rect, label: "节点管理脚本<br/>node_manager.sh reconcile" }
-
-    ServerHost@{ shape: rounded, label: "Server 主机" }
-    ServerProcess@{ shape: stadium, label: "常驻进程<br/>k3s.service" }
-    ControlPlane@{ shape: rounded, label: "Kubernetes 控制面可用" }
-
-    DesiredState@{ shape: diamond, label: "Worker 的 enabled 状态" }
-
-    AddWorker@{ shape: rect, label: "节点管理脚本<br/>准备环境并加入集群" }
-    WorkerHost@{ shape: rounded, label: "Worker 主机" }
-    AgentProcess@{ shape: stadium, label: "常驻进程<br/>k3s-agent.service" }
-    WorkerReady@{ shape: rounded, label: "Worker Node Ready<br/>GPU 资源可调度" }
-
-    KeepWorker@{ shape: rounded, label: "节点已符合期望<br/>保持运行" }
-
-    DrainWorker@{ shape: rect, label: "节点管理脚本<br/>Cordon、Drain、删除 Node" }
-    StopAgent@{ shape: stadium, label: "停止并禁用<br/>k3s-agent.service" }
-    WorkerRemoved@{ shape: rounded, label: "Worker 退出集群<br/>不再承载 Pod" }
-
-    Platform@{ shape: rect, label: "平台部署脚本<br/>install_platform.sh" }
-    OMEProcess@{ shape: stadium, label: "OME 组件<br/>Controller：维护服务期望状态<br/>Model Agent：验证 Worker 模型资产" }
-
-    ModelConfig@{ shape: doc, label: "模型服务配置<br/>InferenceService + ServingRuntime" }
-    ModelDeploy@{ shape: rect, label: "模型部署脚本<br/>deploy_model.sh" }
-    ServingProcess@{ shape: stadium, label: "服务进程<br/>SGLang Engine + Model Gateway" }
-    Endpoint@{ shape: rounded, label: "OpenAI API 服务可用" }
-
-    Config --> Deploy
-    Deploy --> ServerHost
-    ServerHost --> ServerProcess
-    ServerProcess --> ControlPlane
-
-    ControlPlane --> Reconcile
-    Config --> Reconcile
-    Reconcile --> DesiredState
-
-    DesiredState -->|"enabled = true，节点未就绪"| AddWorker
-    AddWorker --> WorkerHost
-    WorkerHost --> AgentProcess
-    AgentProcess --> WorkerReady
-
-    DesiredState -->|"enabled = true，节点已就绪"| KeepWorker
-
-    DesiredState -->|"enabled = false"| DrainWorker
-    DrainWorker --> StopAgent
-    StopAgent --> WorkerRemoved
-
-    ControlPlane --> Platform
-    WorkerReady --> Platform
-    Platform --> OMEProcess
-
-    OMEProcess --> ModelDeploy
-    ModelConfig --> ModelDeploy
-    ModelDeploy --> ServingProcess
-    ServingProcess --> Endpoint
-
-    classDef config fill:#fff4cc,stroke:#b7791f,color:#573a00
-    classDef script fill:#dbeafe,stroke:#2563eb,color:#172554
-    classDef process fill:#dcfce7,stroke:#16a34a,color:#14532d
-    classDef state fill:#f3e8ff,stroke:#9333ea,color:#3b0764
-    classDef decision fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
-
-    class Config,ModelConfig config
-    class Deploy,Reconcile,AddWorker,DrainWorker,Platform,ModelDeploy script
-    class ServerProcess,AgentProcess,StopAgent,OMEProcess,ServingProcess process
-    class ServerHost,ControlPlane,WorkerHost,WorkerReady,KeepWorker,WorkerRemoved,Endpoint state
-    class DesiredState decision
-```
+![1. 部署流程](../assets/diagrams/deployment-sglang-native-02.svg)
 
 - 黄色文档：配置文件；
 - 蓝色矩形：一次性执行的脚本；
@@ -328,12 +163,16 @@ flowchart TD
 | NVIDIA Device Plugin | `v0.17.4` |
 | OME 源码 | [`015070c`](https://github.com/ome-projects/ome/commit/015070c9661c704addf25ce8d0f6e71fba7f7df9) |
 | OME Controller / Model Agent | `v1.2.1` |
-| SGLang Engine | `v0.5.2-cu126` |
-| SGLang Model Gateway | `v0.3.2` |
+| SGLang 源码 | 由 `cluster.runtimeSourcePath` 指向本地仓库；缺失时从 `cluster.runtimeGitUrl` 下载并 checkout `cluster.runtimeGitRef` |
+| SGLang Engine 基础镜像 | `docker.io/nvidia/cuda:12.6.1-cudnn-devel-ubuntu22.04` |
+| SGLang Router 基础镜像 | `docker.io/ubuntu:22.04` |
 | NVIDIA Driver | `>= 560` |
 | NVIDIA Container Toolkit | `1.19.1-1` |
 
-SGLang Engine 使用 CUDA 12.6 镜像。部署前需确认 Worker 的 NVIDIA Driver 与该镜像兼容。
+SGLang Engine 与 Model Gateway 不再使用预构建应用镜像。管理机先将 SGLang 源码同步到各运行节点，
+Engine Pod 使用 CUDA 基础镜像，Router Pod 使用通用 Ubuntu 基础镜像，并挂载源码目录和 venv 沙箱目录，首次启动或源码 revision 变化时在沙箱内
+执行 `pip install -e python[all]`，随后从源码启动 Engine 或 Router。部署前需确认 Worker 的
+NVIDIA Driver 与基础镜像中的 CUDA 版本兼容。
 
 ## 3. 部署前提
 
@@ -343,9 +182,12 @@ SGLang Engine 使用 CUDA 12.6 镜像。部署前需确认 Worker 的 NVIDIA Dri
 2. 远端用户具有免交互 `sudo` 权限，或由管理员提前完成人工系统准备；
 3. 所有节点的集群网卡和内部地址互通；
 4. Worker 已安装受支持的 NVIDIA Driver；
-5. Worker 有足够的磁盘空间保存模型和容器镜像；
+5. Worker 有足够的磁盘空间保存模型、基础镜像、SGLang 源码和运行时沙箱；
 6. Server API 地址可由管理机访问；
-7. 模型服务地址可由调用方访问。
+7. 模型服务地址可由调用方访问；
+8. 管理机本地存在可编译的 SGLang 源码仓库，路径由 `cluster.runtimeSourcePath` 或
+   `SGLANG_SOURCE_PATH` 指定；若该路径不存在，部署脚本会从 `cluster.runtimeGitUrl` 下载源码并 checkout
+   `cluster.runtimeGitRef`。
 
 部署脚本会准备 `kubectl`、Helm、K3s 和 NVIDIA Container Toolkit。若驱动安装或升级需要重启，
 脚本会等待节点恢复后继续执行。
@@ -360,6 +202,7 @@ SGLang Engine 使用 CUDA 12.6 镜像。部署前需确认 Worker 的 NVIDIA Dri
 - 安装、启动、停止和禁用 K3s、K3s Agent 或旧 kubelet；
 - 读取 K3s kubeconfig 和 Worker 加入集群所需的 Token；
 - 创建 `/mnt/data/models` 并设置模型目录所有者；
+- 创建 SGLang 源码目录和运行时沙箱目录；
 - 驱动安装完成后重启节点。
 
 免交互权限可从管理机验证：
@@ -540,8 +383,9 @@ kubectl get nodes -o wide
 ```
 
 没有免交互 `sudo` 时，不执行 `prepare_environment.sh`、`preflight.sh`、
-`bootstrap_cluster.sh`、`node_manager.sh add/remove` 和 `stage_model.sh`；这些脚本包含
-`sudo -n`。对应的系统操作、节点生命周期操作和模型目录准备需要由管理员手动完成。
+`bootstrap_cluster.sh`、`node_manager.sh add/remove`、`stage_runtime_source.sh` 和 `stage_model.sh`；
+这些脚本包含 `sudo -n`。对应的系统操作、节点生命周期操作、运行时源码目录、沙箱目录和模型目录准备
+需要由管理员手动完成。
 
 ## 4. 配置集群
 
@@ -562,6 +406,13 @@ kubectl get nodes -o wide
 | `minimumDiskGiB` | 节点最小可用磁盘要求 |
 | `minimumNvidiaDriverMajor` | Worker 最低 NVIDIA Driver 主版本 |
 | `nvidiaContainerToolkitVersion` | NVIDIA Container Toolkit 固定版本 |
+| `runtimeSourcePath` | 管理机本地 SGLang 源码仓库路径；可用 `SGLANG_SOURCE_PATH` 临时覆盖 |
+| `runtimeGitUrl` | 当 `runtimeSourcePath` 不存在时自动 clone 的 SGLang Git 仓库；可用 `SGLANG_GIT_URL` 临时覆盖 |
+| `runtimeGitRef` | 自动 clone 后 checkout 的 branch、tag 或 commit；可用 `SGLANG_GIT_REF` 临时覆盖 |
+| `runtimeRepoTarget` | 每台运行节点上的 SGLang 源码目录 |
+| `runtimeSandboxTarget` | 每台运行节点上的 venv 沙箱目录 |
+| `runtimeBaseImage` | Engine 使用的 CUDA 基础镜像 |
+| `runtimeRouterBaseImage` | Router 使用的通用 Linux 基础镜像 |
 
 ### 4.2 节点配置
 
@@ -700,7 +551,7 @@ CONFIG_PATH=/path/to/nodes.json \
 发布其他模型时，需要确认：
 
 1. `ClusterBaseModel` 中的模型名称、格式、架构和存储地址；
-2. `ClusterServingRuntime` 中的 SGLang 镜像、启动参数和资源规格；
+2. `ClusterServingRuntime` 中的基础镜像、源码挂载、沙箱挂载、启动参数和资源规格；
 3. `InferenceService` 中的 Engine 与 Router 副本范围；
 4. NodePort 不与集群中的其他服务冲突；
 5. Engine 副本数不超过可调度 GPU 数。
@@ -790,17 +641,30 @@ spec:
     nodeSelector:
       alayajet.io/accelerator-pool: h200-sxm-8gpu
     runtimeClassName: nvidia
+    volumes:
+      - name: sglang-source
+        hostPath:
+          path: /mnt/data/repos/SGLang
+          type: Directory
+      - name: sglang-sandbox
+        hostPath:
+          path: /mnt/data/sandboxes/sglang-native
+          type: DirectoryOrCreate
     runner:
       name: engine
-      image: docker.io/lmsysorg/sglang:v0.5.2-cu126
+      image: docker.io/pytorch/pytorch:2.7.1-cuda12.6-cudnn9-devel
       command:
-        - python3
-        - -m
-        - sglang.launch_server
-        - --model-path
-        - $(MODEL_PATH)
-        - --tp-size
-        - "8"
+        - bash
+        - -lc
+        - |
+          set -euo pipefail
+          source_dir=/opt/sglang-source
+          venv_dir=/opt/sglang-sandbox/venv
+          python3 -m venv "$venv_dir"
+          "$venv_dir/bin/python" -m pip install -e "$source_dir/python[all]"
+          exec "$venv_dir/bin/python" -m sglang.launch_server \
+            --model-path $(MODEL_PATH) \
+            --tp-size 8
       resources:
         requests:
           cpu: "64"
@@ -810,6 +674,12 @@ spec:
           cpu: "64"
           memory: 512Gi
           nvidia.com/gpu: "8"
+      volumeMounts:
+        - name: sglang-source
+          mountPath: /opt/sglang-source
+          readOnly: true
+        - name: sglang-sandbox
+          mountPath: /opt/sglang-sandbox
 ```
 
 `InferenceService` 中的副本数表示独立的 8-GPU Engine 数量：
@@ -894,9 +764,34 @@ Runtime 和 InferenceService 的放置约束一起写入工作负载。
 - 节点身份、内部地址和集群网卡；
 - CPU、内存和磁盘空间；
 - NVIDIA Driver 与容器 Runtime；
+- SGLang 本地源码仓库；
 - 模型源目录和必要文件。
 
-### 6.2 准备模型
+### 6.2 准备运行时源码
+
+```bash
+./deploy/sglang-native/scripts/stage_runtime_source.sh
+```
+
+脚本从 `cluster.runtimeSourcePath` 或 `SGLANG_SOURCE_PATH` 读取管理机本地 SGLang 仓库；如果该路径不存在，
+会先从 `cluster.runtimeGitUrl` 或 `SGLANG_GIT_URL` clone，并 checkout `cluster.runtimeGitRef` 或
+`SGLANG_GIT_REF`。如果路径已经存在但不是可用的 SGLang 源码树，脚本会报错，不会覆盖成员本地目录。
+
+随后脚本经管理机中转同步到：
+
+- Server 节点的 `cluster.runtimeRepoTarget`，供 Model Gateway 使用；
+- 每个 `modelMode!=none` 的 Worker 节点，供 SGLang Engine 使用。
+
+脚本还会在每台目标节点创建 `cluster.runtimeSandboxTarget`。Pod 首次启动或源码 revision 变化时，会在该目录中
+创建或更新 venv 沙箱，并从挂载的源码执行 `pip install -e python[all]`。
+
+指定同步目标：
+
+```bash
+./deploy/sglang-native/scripts/stage_runtime_source.sh <node-name>
+```
+
+### 6.3 准备模型
 
 ```bash
 ./deploy/sglang-native/scripts/stage_model.sh
@@ -914,7 +809,7 @@ Runtime 和 InferenceService 的放置约束一起写入工作负载。
 ./deploy/sglang-native/scripts/stage_model.sh <worker-name>
 ```
 
-### 6.3 建立 K3s 集群
+### 6.4 建立 K3s 集群
 
 ```bash
 ./deploy/sglang-native/scripts/bootstrap_cluster.sh
@@ -932,7 +827,7 @@ Worker：
 节点命名规则见[节点命名与身份管理](#421-节点命名与身份管理)；SQLite 数据库、Server Token、离机备份和
 s04 故障恢复流程见[控制面备份与故障恢复](../operations/cluster_and_model_status.md#11-控制面备份与故障恢复)。
 
-### 6.4 安装平台组件
+### 6.5 安装平台组件
 
 ```bash
 ./deploy/sglang-native/scripts/install_platform.sh
@@ -949,7 +844,7 @@ s04 故障恢复流程见[控制面备份与故障恢复](../operations/cluster_
 OME Controller 通过 `alayajet.io/role=control` 运行在 Server；Model Agent 通过
 `alayajet.io/role=gpu-worker` 运行在每个 GPU Worker。
 
-### 6.5 发布模型服务
+### 6.6 发布模型服务
 
 ```bash
 ./deploy/sglang-native/scripts/deploy_model.sh
@@ -964,7 +859,11 @@ OME Controller 根据模型清单创建并维护：
 - HPA；
 - PDB。
 
-脚本等待 `InferenceService` 的 `Ready` 条件成立后返回。
+脚本会使用 `nodes.json` 渲染 Runtime 清单中的基础镜像、源码目录和沙箱目录，把渲染后清单 hash 写入
+`InferenceService` 注解以触发 Runtime 模板重调谐，并等待
+`InferenceService` 的 `Ready` 条件成立后返回。这里使用脚本内置轮询直接读取
+`.status.conditions[?(@.type=="Ready")].status`，避免 OME CRD 已显示 `READY=True` 但
+`kubectl wait inferenceservice/...` 仍超时的情况。
 
 ## 7. 部署验收
 
@@ -982,6 +881,9 @@ OME Controller 根据模型清单创建并维护：
 4. `/v1/models` 能发现配置的模型；
 5. 非流式 Chat Completions 返回成功；
 6. 流式 Chat Completions 持续返回 SSE，并以 `data: [DONE]` 结束。
+
+`verify.sh` 对 `InferenceService` 的等待方式与 `deploy_model.sh` 相同：直接读取 Ready condition 的
+status 字段；Engine 和 Router Pod 则继续使用 Kubernetes 原生 Pod Ready 等待。
 
 也可以分别检查：
 
@@ -1007,7 +909,7 @@ http://<serviceAddress>:<serviceNodePort>
 ./deploy/sglang-native/scripts/node_manager.sh add <worker-name>
 ```
 
-该命令会将节点设为启用状态、准备环境、加入 K3s、恢复节点标签、等待 GPU 上报并准备模型。
+该命令会将节点设为启用状态、准备环境、加入 K3s、恢复节点标签、等待 GPU 上报，并准备运行时源码和模型。
 
 移除 Worker：
 
@@ -1016,7 +918,7 @@ http://<serviceAddress>:<serviceNodePort>
 ```
 
 该命令依次执行 cordon、drain、删除 Kubernetes Node，并停止和禁用远端
-`k3s-agent.service`。节点上的模型文件和容器镜像会保留。
+`k3s-agent.service`。节点上的模型文件、SGLang 源码和运行时沙箱会保留。
 
 根据配置收敛所有 Worker：
 
@@ -1041,6 +943,7 @@ http://<serviceAddress>:<serviceNodePort>
 | `deploy/sglang-native/model/qwen2.5-0.5b-instruct.yaml` | 模型、Runtime、服务和入口 |
 | `deploy/sglang-native/scripts/prepare_environment.sh` | 安装和升级管理机与远端依赖 |
 | `deploy/sglang-native/scripts/preflight.sh` | 部署前检查 |
+| `deploy/sglang-native/scripts/stage_runtime_source.sh` | SGLang 源码分发与沙箱目录准备 |
 | `deploy/sglang-native/scripts/stage_model.sh` | 模型分发与校验 |
 | `deploy/sglang-native/scripts/bootstrap_cluster.sh` | 创建 K3s 集群 |
 | `deploy/sglang-native/scripts/install_platform.sh` | 安装平台组件 |

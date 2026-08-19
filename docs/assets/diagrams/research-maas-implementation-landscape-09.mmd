@@ -1,0 +1,9 @@
+flowchart TB
+    Platform["平台资源底座<br/>节点 · CPU/GPU · 网络 · 存储 · 工作负载生命周期"]
+    Admission["集群级准入与队列<br/>配额 · 公平共享 · Gang · 抢占 · Backfill"]
+    Runtime["分布式应用运行时<br/>Actor/Task · Placement Group · 跨节点执行"]
+    Request["在线请求调度<br/>队列 · KV/Prefix · Engine 负载 · Endpoint 选择"]
+
+    Platform --> Admission
+    Admission --> Runtime
+    Runtime --> Request

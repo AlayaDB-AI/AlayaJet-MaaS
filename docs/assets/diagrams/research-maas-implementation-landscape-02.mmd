@@ -1,0 +1,14 @@
+sequenceDiagram
+    participant Client as 客户端
+    participant Gateway as Gateway / Envoy
+    participant EPP as llm-d EPP
+    participant Engine as Engine Pod B
+
+    Client->>Gateway: Chat Completions 请求
+    Gateway->>EPP: 候选 Engine + 请求内容
+    Note over EPP: 读取 InferencePool、KV、队列和负载状态
+    EPP->>EPP: Filter → Score → Pick
+    EPP-->>Gateway: 返回 Engine Pod B 地址
+    Gateway->>Engine: 转发原始请求
+    Engine-->>Gateway: 流式 Token
+    Gateway-->>Client: 流式 Token

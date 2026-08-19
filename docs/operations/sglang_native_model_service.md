@@ -133,13 +133,14 @@ Driver 发生安装或升级时，脚本会重启该节点并等待 SSH 恢复�
 ### 1.3 分发模型并安装平台
 
 ```bash
+./deploy/sglang-native/scripts/stage_runtime_source.sh
 ./deploy/sglang-native/scripts/stage_model.sh
 ./deploy/sglang-native/scripts/install_platform.sh
 ./deploy/sglang-native/scripts/deploy_model.sh
 ./deploy/sglang-native/scripts/verify.sh
 ```
 
-这四步依次完成模型分发、模型服务控制面安装、模型服务发布和 OpenAI-compatible API 验收。其中 `install_platform.sh` 实际安装：
+这五步依次完成运行时源码分发、模型分发、模型服务控制面安装、模型服务发布和 OpenAI-compatible API 验收。其中 `install_platform.sh` 实际安装：
 
 | 组件 | 部署位置 | 作用 |
 |---|---|---|
@@ -152,7 +153,11 @@ Driver 发生安装或升级时，脚本会重启该节点并等待 SSH 恢复�
 这里的“GPU 组件”特指 NVIDIA Device Plugin。NVIDIA Driver 和 NVIDIA Container Toolkit
 属于宿主机运行环境，已经由前面的 `prepare_environment.sh` 安装。
 
-`verify.sh` 同时验证模型发现、非流式 Chat Completions 和流式 Chat Completions。
+`deploy_model.sh` 和 `verify.sh` 等待 `InferenceService` 时会直接轮询
+`.status.conditions[?(@.type=="Ready")].status`，读到 `True` 后继续。不要用
+`kubectl wait --for=condition=Ready inferenceservice/...` 替代这一步；OME CRD 已经显示
+`READY=True` 时，`kubectl wait` 仍可能因 condition 解析不一致而超时。`verify.sh` 同时验证模型发现、
+非流式 Chat Completions 和流式 Chat Completions。
 
 ## 2. 连接和查看集群
 
@@ -181,30 +186,7 @@ kubectl -n qwen2-5-0-5b-instruct get pods,services -o wide
 
 当前资源关系：
 
-```mermaid
-flowchart LR
-    Config["nodes.json<br/>机器期望态"]
-    Nodes["K3s Nodes<br/>可调度资源"]
-    Model["ClusterBaseModel<br/>模型资产"]
-    Runtime["ClusterServingRuntime<br/>SGLang 运行规格"]
-    Service["InferenceService<br/>发布与副本"]
-    OME["OME Controller<br/>生成工作负载与调度约束"]
-    Workload["Deployment / PodSpec<br/>工作负载期望态"]
-    Scheduler["Kubernetes Scheduler<br/>节点绑定"]
-    Router["Model Gateway<br/>请求选点"]
-    Engines["SGLang Engines<br/>执行推理"]
-
-    Config --> Nodes
-    Model --> Service
-    Runtime --> Service
-    Service --> OME
-    OME --> Workload
-    Workload --> Scheduler
-    Nodes --> Scheduler
-    Scheduler --> Engines
-    OME --> Router
-    Router --> Engines
-```
+![2. 连接和查看集群](../assets/diagrams/operations-sglang-native-model-service-01.svg)
 
 ## 3. 动态管理计算节点
 
@@ -227,7 +209,7 @@ flowchart LR
 ```
 
 `remove` 会把该节点设为停用，依次执行 cordon、drain、删除 Kubernetes Node 和停止 K3s Agent。
-模型文件与容器镜像保留，因此再次 `add` 时可以快速恢复。
+模型文件、SGLang 源码和运行时沙箱保留，因此再次 `add` 时可以快速恢复。
 
 ### 3.3 按配置收敛
 
@@ -265,7 +247,7 @@ kubectl get node <节点名>
 | 对象 | 管什么 | 常见修改 |
 |---|---|---|
 | `ClusterBaseModel` | 模型身份、格式和存储路径 | 新模型、新版本、新目录 |
-| `ClusterServingRuntime` | Engine/Router 镜像、GPU 数和 SGLang 参数 | TP、显存比例、镜像和启动参数 |
+| `ClusterServingRuntime` | Engine/Router 基础镜像、源码挂载、沙箱挂载、GPU 数和 SGLang 参数 | TP、显存比例、基础镜像和启动参数 |
 | `InferenceService` | 模型与 Runtime 的组合、Engine/Router 副本和服务级放置策略 | 发布、放置、扩缩和停止 |
 
 当前完整定义位于
@@ -449,7 +431,35 @@ kubectl -n qwen2-5-0-5b-instruct describe pod -l component=engine
 完整的放置字段分工和控制链见
 [OME + SGLang-native 集群部署](../deployment/sglang_native.md#51-ome-controller-与-scheduler-的放置职责)。
 
-### 4.3 分发模型文件
+### 4.3 分发运行时源码
+
+当前 Runtime 从节点本地源码和 venv 沙箱启动。更新 SGLang 源码后，先从管理机同步源码树：
+
+```bash
+./deploy/sglang-native/scripts/stage_runtime_source.sh
+```
+
+脚本会优先使用 `cluster.runtimeSourcePath` 或 `SGLANG_SOURCE_PATH` 指向的本地仓库。如果该路径不存在，
+会从 `cluster.runtimeGitUrl` 或 `SGLANG_GIT_URL` clone，并 checkout `cluster.runtimeGitRef` 或
+`SGLANG_GIT_REF`。如果路径已经存在但不是可用的 SGLang 源码树，脚本会停止并要求人工处理，避免覆盖成员
+本地目录。
+
+同步到指定节点：
+
+```bash
+./deploy/sglang-native/scripts/stage_runtime_source.sh <节点名> [<节点名> ...]
+```
+
+临时使用另一份本地源码仓库：
+
+```bash
+SGLANG_SOURCE_PATH=/path/to/SGLang \
+  ./deploy/sglang-native/scripts/stage_runtime_source.sh
+```
+
+同步完成后，下一次 Engine 或 Router Pod 启动时会比较源码 revision，并在沙箱中重新安装源码。
+
+### 4.4 分发模型文件
 
 当前模型直接执行：
 
@@ -475,7 +485,7 @@ MODEL_TARGET=/mnt/data/models/<组织>/<模型名> \
 完整权重只会同步到 `modelMode=full` 的节点；`modelMode=tokenizer` 节点只接收配置和 tokenizer。
 脚本支持单文件或分片的 `safetensors`、`bin` 和 `gguf` 权重。
 
-### 4.4 修改当前服务的副本和放置配置
+### 4.5 修改当前服务的副本和放置配置
 
 先设置当前服务变量并查看修改前状态：
 
@@ -522,9 +532,10 @@ kubectl -n "$MODEL_NS" patch inferenceservice "$MODEL_ISVC" \
 修改后观察 OME 收敛、Engine 节点分布和调度事件：
 
 ```bash
-kubectl -n "$MODEL_NS" wait \
-  --for=condition=Ready inferenceservice/"$MODEL_ISVC" \
-  --timeout=30m
+until [ "$(kubectl -n "$MODEL_NS" get inferenceservice "$MODEL_ISVC" \
+  -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = True ]; do
+  sleep 5
+done
 kubectl -n "$MODEL_NS" get pods -l component=engine -o wide
 kubectl -n "$MODEL_NS" get events --sort-by=.lastTimestamp | tail -n 30
 ```
@@ -532,9 +543,9 @@ kubectl -n "$MODEL_NS" get events --sort-by=.lastTimestamp | tail -n 30
 命令行 patch 用于即时操作；确认结果后，将相同配置写回
 `deploy/sglang-native/model/qwen2.5-0.5b-instruct.yaml`，使仓库声明与集群期望态一致。
 
-### 4.5 为当前模型发布新的 Runtime 配置
+### 4.6 为当前模型发布新的 Runtime 配置
 
-修改 SGLang 镜像、启动参数、GPU 数、CPU/内存或健康探针时，为 Runtime 创建新的版本名。例如将
+修改基础镜像、源码挂载、启动参数、GPU 数、CPU/内存或健康探针时，为 Runtime 创建新的版本名。例如将
 `--mem-fraction-static` 从 `0.85` 调整为 `0.80`：
 
 ```bash
@@ -574,9 +585,10 @@ kubectl -n "$MODEL_NS" get pods -l component=engine -w
 ```bash
 kubectl -n "$MODEL_NS" get inferenceservice "$MODEL_ISVC" \
   -o jsonpath='{.spec.runtime.name}{"\n"}'
-kubectl -n "$MODEL_NS" wait \
-  --for=condition=Ready inferenceservice/"$MODEL_ISVC" \
-  --timeout=30m
+until [ "$(kubectl -n "$MODEL_NS" get inferenceservice "$MODEL_ISVC" \
+  -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = True ]; do
+  sleep 5
+done
 ./deploy/sglang-native/scripts/verify.sh
 ```
 
@@ -586,21 +598,22 @@ kubectl -n "$MODEL_NS" wait \
 kubectl -n "$MODEL_NS" patch inferenceservice "$MODEL_ISVC" \
   --type merge \
   -p "{\"spec\":{\"runtime\":{\"name\":\"$OLD_RUNTIME\"}}}"
-kubectl -n "$MODEL_NS" wait \
-  --for=condition=Ready inferenceservice/"$MODEL_ISVC" \
-  --timeout=30m
+until [ "$(kubectl -n "$MODEL_NS" get inferenceservice "$MODEL_ISVC" \
+  -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = True ]; do
+  sleep 5
+done
 ```
 
 该流程保持模型资产和公共 Service 不变，只更新 Engine Runtime revision。
 
-### 4.6 从 Qwen 并行切换到其他开源模型
+### 4.7 从 Qwen 并行切换到其他开源模型
 
 下面以 `TinyLlama/TinyLlama-1.1B-Chat-v1.0` 为例，展示跨模型家族切换。该模型使用
 `LlamaForCausalLM` 架构和 Safetensors 权重；新模型先使用一个 Engine 副本并行启动，通过独立端口验证
 后，再把现有 NodePort Service 切换到新 Router。模型身份、许可证、文件和 SGLang 使用方式见
 [TinyLlama 官方模型仓库](https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0)。
 
-#### 4.6.1 检查可用资源
+#### 4.7.1 检查可用资源
 
 ```bash
 export MODEL_NS=qwen2-5-0-5b-instruct
@@ -624,7 +637,7 @@ ssh haotian@100.64.0.17 nvidia-smi
 
 并行发布需要至少一张可供 Kubernetes 调度的新 GPU。
 
-#### 4.6.2 分发新模型资产
+#### 4.7.2 分发新模型资产
 
 登录 s05：
 
@@ -705,14 +718,14 @@ ssh haotian@100.64.0.17 \
   "test -f '$NEW_MODEL_PATH/config.json' && find '$NEW_MODEL_PATH' -maxdepth 1 -type f -name '*.safetensors' -print -quit"
 ```
 
-#### 4.6.3 创建新模型的 OME revision
+#### 4.7.3 创建新模型的 OME revision
 
 三个 OME 对象的职责如下：
 
 | OME 对象 | 作用域 | 本次配置内容 |
 |---|---|---|
 | `ClusterBaseModel` | 集群级 | TinyLlama 的身份、固定 revision、本地模型目录和资产节点范围 |
-| `ClusterServingRuntime` | 集群级 | SGLang 镜像、Llama 架构、启动参数、资源、探针、Engine 与 Router 放置规则 |
+| `ClusterServingRuntime` | 集群级 | 基础镜像、源码挂载、沙箱挂载、Llama 架构、启动参数、资源、探针、Engine 与 Router 放置规则 |
 | `InferenceService` | namespace 级 | 组合 BaseModel 与 Runtime，并声明 Engine、Router 副本和服务级放置策略 |
 
 复制当前清单作为模板：
@@ -794,27 +807,32 @@ spec:
       - name: dshm
         emptyDir:
           medium: Memory
+      - name: sglang-source
+        hostPath:
+          path: /mnt/data/repos/SGLang
+          type: Directory
+      - name: sglang-sandbox
+        hostPath:
+          path: /mnt/data/sandboxes/sglang-native
+          type: DirectoryOrCreate
     runner:
       name: engine
-      image: docker.io/lmsysorg/sglang:v0.5.2-cu126
+      image: docker.io/pytorch/pytorch:2.7.1-cuda12.6-cudnn9-devel
       imagePullPolicy: IfNotPresent
       command:
-        - python3
-        - -m
-        - sglang.launch_server
-        - --host
-        - 0.0.0.0
-        - --port
-        - "8080"
-        - --enable-metrics
-        - --model-path
-        - $(MODEL_PATH)
-        - --tp-size
-        - "1"
-        - --mem-fraction-static
-        - "0.85"
-        - --served-model-name
-        - TinyLlama/TinyLlama-1.1B-Chat-v1.0
+        - bash
+        - -lc
+        - |
+          # 与当前 Qwen 清单保持一致：进入 /opt/sglang-sandbox/venv，
+          # 从 /opt/sglang-source 执行 pip install -e python[all] 后启动。
+          exec /opt/sglang-sandbox/venv/bin/python -m sglang.launch_server \
+            --host 0.0.0.0 \
+            --port 8080 \
+            --enable-metrics \
+            --model-path $(MODEL_PATH) \
+            --tp-size 1 \
+            --mem-fraction-static 0.85 \
+            --served-model-name TinyLlama/TinyLlama-1.1B-Chat-v1.0
       ports:
         - name: http
           containerPort: 8080
@@ -831,6 +849,11 @@ spec:
       volumeMounts:
         - name: dshm
           mountPath: /dev/shm
+        - name: sglang-source
+          mountPath: /opt/sglang-source
+          readOnly: true
+        - name: sglang-sandbox
+          mountPath: /opt/sglang-sandbox
       startupProbe:
         httpGet:
           path: /health_generate
@@ -858,25 +881,33 @@ spec:
     maxReplicas: 1
     nodeSelector:
       alayajet.io/role: control
+    volumes:
+      - name: sglang-source
+        hostPath:
+          path: /mnt/data/repos/SGLang
+          type: Directory
+      - name: sglang-sandbox
+        hostPath:
+          path: /mnt/data/sandboxes/sglang-native
+          type: DirectoryOrCreate
     runner:
       name: router
-      image: docker.io/lmsysorg/sgl-model-gateway:v0.3.2
+      image: docker.io/pytorch/pytorch:2.7.1-cuda12.6-cudnn9-devel
       imagePullPolicy: IfNotPresent
       command:
-        - python3
-        - -m
-        - sglang_router.launch_router
-        - --host
-        - 0.0.0.0
-        - --port
-        - "8080"
-        - --service-discovery
-        - --service-discovery-namespace
-        - $(NAMESPACE)
-        - --service-discovery-port
-        - "8080"
-        - --selector
-        - component=engine ome.io/inferenceservice=$(INFERENCESERVICE_NAME)
+        - bash
+        - -lc
+        - |
+          # 与当前 Qwen 清单保持一致：复用源码沙箱后启动 Router。
+          exec /opt/sglang-sandbox/venv/bin/python -m sglang_router.launch_router \
+            --host 0.0.0.0 \
+            --port 8080 \
+            --service-discovery \
+            --service-discovery-namespace $(NAMESPACE) \
+            --service-discovery-port 8080 \
+            --selector \
+            component=engine \
+            "ome.io/inferenceservice=$(INFERENCESERVICE_NAME)"
       env:
         - name: NAMESPACE
           valueFrom:
@@ -897,6 +928,12 @@ spec:
         limits:
           cpu: "2"
           memory: 2Gi
+      volumeMounts:
+        - name: sglang-source
+          mountPath: /opt/sglang-source
+          readOnly: true
+        - name: sglang-sandbox
+          mountPath: /opt/sglang-sandbox
       startupProbe:
         httpGet:
           path: /liveness
@@ -977,7 +1014,7 @@ spec:
       nodePort: 30080
 ```
 
-#### 4.6.4 校验、提交并观察 OME 收敛
+#### 4.7.4 校验、提交并观察 OME 收敛
 
 先让 API Server 和 OME Webhook 校验字段：
 
@@ -1029,9 +1066,10 @@ kubectl -n "$MODEL_NS" get pods \
 在另一个终端等待 InferenceService Ready：
 
 ```bash
-kubectl -n "$MODEL_NS" wait \
-  --for=condition=Ready inferenceservice/"$NEW_ISVC" \
-  --timeout=30m
+until [ "$(kubectl -n "$MODEL_NS" get inferenceservice "$NEW_ISVC" \
+  -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = True ]; do
+  sleep 5
+done
 ```
 
 查看 Ready 条件、Engine 节点和 Router 节点：
@@ -1060,7 +1098,7 @@ kubectl -n "$MODEL_NS" logs \
   --tail=200
 ```
 
-#### 4.6.5 在切换入口前验证新模型
+#### 4.7.5 在切换入口前验证新模型
 
 在一个终端把新 Router 转发到管理机的 `18080`：
 
@@ -1095,7 +1133,7 @@ curl -N http://127.0.0.1:18080/v1/chat/completions \
   }"
 ```
 
-#### 4.6.6 切换公共入口
+#### 4.7.6 切换公共入口
 
 验证通过后，把现有 NodePort Service 的 selector 切换到新 InferenceService 的 Router：
 
@@ -1137,7 +1175,7 @@ kubectl -n "$MODEL_NS" logs \
   --tail=100
 ```
 
-#### 4.6.7 回滚入口
+#### 4.7.7 回滚入口
 
 在旧 revision 保留期间，回滚只需要把公共 Service selector 切回旧 Router：
 
@@ -1167,12 +1205,13 @@ kubectl -n "$MODEL_NS" wait \
 kubectl -n "$MODEL_NS" patch inferenceservice "$NEW_ISVC" \
   --type merge \
   -p '{"spec":{"engine":{"minReplicas":2,"maxReplicas":2}}}'
-kubectl -n "$MODEL_NS" wait \
-  --for=condition=Ready inferenceservice/"$NEW_ISVC" \
-  --timeout=30m
+until [ "$(kubectl -n "$MODEL_NS" get inferenceservice "$NEW_ISVC" \
+  -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = True ]; do
+  sleep 5
+done
 ```
 
-### 4.7 扩缩、停止和恢复
+### 4.8 扩缩、停止和恢复
 
 设置目标服务和副本数：
 
@@ -1184,9 +1223,10 @@ export ENGINE_REPLICAS=2
 kubectl -n "$SCALE_NS" patch inferenceservice "$SCALE_ISVC" \
   --type merge \
   -p "{\"spec\":{\"engine\":{\"minReplicas\":$ENGINE_REPLICAS,\"maxReplicas\":$ENGINE_REPLICAS}}}"
-kubectl -n "$SCALE_NS" wait \
-  --for=condition=Ready inferenceservice/"$SCALE_ISVC" \
-  --timeout=30m
+until [ "$(kubectl -n "$SCALE_NS" get inferenceservice "$SCALE_ISVC" \
+  -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = True ]; do
+  sleep 5
+done
 kubectl -n "$SCALE_NS" get pods -l component=engine -o wide
 ```
 
@@ -1205,9 +1245,10 @@ kubectl -n "$SCALE_NS" wait \
 ```bash
 kubectl apply \
   -f deploy/sglang-native/model/qwen2.5-0.5b-instruct.yaml
-kubectl -n "$SCALE_NS" wait \
-  --for=condition=Ready inferenceservice/"$SCALE_ISVC" \
-  --timeout=30m
+until [ "$(kubectl -n "$SCALE_NS" get inferenceservice "$SCALE_ISVC" \
+  -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = True ]; do
+  sleep 5
+done
 ```
 
 ## 5. 发送请求

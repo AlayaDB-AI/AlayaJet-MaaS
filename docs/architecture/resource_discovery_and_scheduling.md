@@ -90,17 +90,7 @@ Node 注册到 Kubernetes，只能证明集群已经看到该节点。新节点�
 一张物理 GPU 不能被 Profile 直接使用。它需要先被发现和审核，再由 Profile 声明需求，最后由
 Kubernetes 分配给具体的 Engine Pod：
 
-```mermaid
-flowchart LR
-    Discover["① 发现设备<br/>形成逐 GPU 原始事实"]
-    Review["② 审核资源<br/>批准节点并设置型号别名"]
-    Declare["③ 声明需求<br/>Profile 指定设备与放置约束"]
-    Claim["④ 生成申请<br/>转换为 Kubernetes 设备申请"]
-    Allocate["⑤ 分配设备<br/>选择 Node 和 GPU UUID"]
-    Engine["Engine Pod<br/>获得设备并启动"]
-
-    Discover --> Review --> Declare --> Claim --> Allocate --> Engine
-```
+![3. 资源如何进入模型服务](../assets/diagrams/architecture-resource-discovery-and-scheduling-01.svg)
 
 这五步是前后依赖的关系：
 
@@ -146,60 +136,7 @@ Kubernetes API 记录设备、申请、分配和 Pod 放置结果；DCGM 与 Pro
 
 ## 4. 总体架构
 
-```mermaid
-flowchart TB
-    Hardware["节点硬件<br/>CPU · 内存 · GPU · 网络 · 存储"]
-    Operator(["平台运维人员"])
-    Profile[("Model Service Profile<br/>设备需求 · 节点 · 资源池 · 拓扑")]
-
-    subgraph NodeComponents["NVIDIA GPU 节点组件"]
-        GFD["NFD / GFD<br/>Node 级发现"]
-        DRADriver["NVIDIA DRA Driver<br/>逐 GPU 发现 · 分配 · CDI 注入"]
-        DCGM["DCGM Exporter<br/>运行指标"]
-    end
-
-    subgraph K8s["Kubernetes 资源"]
-        ResourceSlice[("ResourceSlice<br/>UUID · productName · memory · topology")]
-        GPUDeviceClass[("DeviceClass<br/>gpu.nvidia.com")]
-        ClaimTemplate[("ResourceClaimTemplate<br/>设备属性 + count")]
-        ResourceClaim[("ResourceClaim<br/>本 Pod 的设备申请与分配结果")]
-        Node["Node<br/>pending-review / active / disabled"]
-    end
-
-    subgraph ControlPlane["Control Plane Pods"]
-        ResourceAPI["Resource Management API<br/>节点准入 · 审核 · 型号别名"]
-        AliasStore[("GPU Model Aliases<br/>别名 -> 原生属性条件")]
-        Controller["Model Service Controller"]
-    end
-
-    Scheduler["Kubernetes Scheduler"]
-    Engine["AlayaJet Inference Engine Pod"]
-
-    Hardware --> GFD
-    Hardware --> DRADriver
-    Hardware -.-> DCGM
-    DRADriver -->|"发布逐设备事实"| ResourceSlice
-    DRADriver --> GPUDeviceClass
-    GFD -->|"补充 Node 标签"| Node
-
-    ResourceSlice --> ResourceAPI
-    Operator -->|"逐卡核对与批准"| ResourceAPI
-    ResourceAPI -->|"维护节点准入状态"| Node
-    ResourceAPI -->|"版本化维护"| AliasStore
-
-    Operator -->|"发布 Profile"| Profile
-    Profile --> Controller
-    AliasStore -->|"解析并固化别名版本"| Controller
-    Controller --> ClaimTemplate
-    Controller -->|"创建 Engine 工作负载"| Scheduler
-    ClaimTemplate -->|"为每个 Pod 生成"| ResourceClaim
-    GPUDeviceClass --> ResourceClaim
-    ResourceSlice --> Scheduler
-    Node --> Scheduler
-    ResourceClaim --> Scheduler
-    Scheduler -->|"共同选择 Node 与具体 GPU"| Engine
-    DRADriver -->|"准备设备并通过 CDI 注入"| Engine
-```
+![4. 总体架构](../assets/diagrams/architecture-resource-discovery-and-scheduling-02.svg)
 
 主链路是：
 
@@ -444,26 +381,7 @@ Control Plane 使用三个稳定对象组织可配置、可查询的硬件资源
 `ServingPool` 引用一组 Node Resource，并约束允许进入资源池的 `InstanceClass`。Model Service Profile
 选择 `InstanceClass` 或 `ServingPool`，Controller 再将其解析为 Node 约束和 DRA 设备条件。
 
-```mermaid
-flowchart LR
-    Discover["NFD / GFD / DRA / NVML<br/>自动发现"]
-    Admin["平台管理员<br/>补齐未识别字段"]
-    NodeResource["Node Resource<br/>事实 · 配置 · 状态"]
-    InstanceClass["InstanceClass<br/>b300-sxm6-8"]
-    ServingPool["ServingPool<br/>premium-b300"]
-    Profile["Model Service Profile"]
-    Scheduler["Controller + Kubernetes Scheduler"]
-
-    Discover --> NodeResource
-    Admin --> NodeResource
-    Admin --> InstanceClass
-    Admin --> ServingPool
-    NodeResource --> InstanceClass
-    NodeResource --> ServingPool
-    InstanceClass --> Profile
-    ServingPool --> Profile
-    Profile --> Scheduler
-```
+![9.1 资源对象](../assets/diagrams/architecture-resource-discovery-and-scheduling-03.svg)
 
 ### 9.2 字段来源与管理员补齐
 

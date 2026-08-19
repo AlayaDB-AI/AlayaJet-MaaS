@@ -1,0 +1,92 @@
+flowchart LR
+    Client(["OpenAI API Client"])
+
+    subgraph Management["管理机 · 运维工作站"]
+        direction TB
+        Repo["AlayaJet-MaaS 仓库<br/>部署与运维脚本"]
+        Kubeconfig["管理用 kubeconfig<br/>~/.kube/alayajet-sglang-native.yaml"]
+        AdminTools["SSH · kubectl · Helm"]
+        Repo --> AdminTools
+        Kubeconfig --> AdminTools
+    end
+
+    subgraph S04["s04 · Control Plane"]
+        direction TB
+        subgraph ControlPlane["控制面"]
+            API(["K3s API Server"])
+            OME(["OME Controller"])
+            ReplicaController(["Deployment Controller / HPA"])
+            Scheduler(["Kubernetes Scheduler"])
+            Kubelet04(["Kubelet"])
+            Model["ClusterBaseModel"]
+            Runtime["ClusterServingRuntime"]
+            ISVC["InferenceService"]
+            Workload["Deployment / Service 期望态"]
+
+            Model -->|"引用模型资产"| ISVC
+            Runtime -->|"引用运行规格"| ISVC
+            ISVC -->|"提交服务与放置期望"| API
+            API -->|"期望态事件"| OME
+            OME -->|"生成含调度约束的工作负载"| Workload
+            Workload -->|"提交资源对象"| API
+            API -->|"资源变更事件"| ReplicaController
+            ReplicaController -->|"生成带调度约束的 Pod"| Scheduler
+        end
+
+        subgraph RequestPlane["请求面"]
+            PublicService{{"NodePort Service<br/>100.64.0.14:30080"}}
+            Router{{"SGLang Model Gateway"}}
+            PublicService ==> Router
+        end
+    end
+
+    subgraph S05["s05 · GPU Worker（NVIDIA A10）"]
+        direction TB
+        Agent05(["OME Model Agent"])
+        Kubelet05(["Kubelet"])
+        EngineEndpoint05{{"Ready Engine Endpoint"}}
+        Engine05["SGLang Engine"]
+        Kubelet05 -.->|"启动并维持"| Engine05
+        EngineEndpoint05 ==> Engine05
+    end
+
+    subgraph S07["s07 · GPU Worker（RTX 4090 × 2）"]
+        direction TB
+        Agent07(["OME Model Agent"])
+        Kubelet07(["Kubelet"])
+        EngineEndpoint07{{"Ready Engine Endpoint"}}
+        Engine07["SGLang Engine"]
+        Kubelet07 -.->|"启动并维持"| Engine07
+        EngineEndpoint07 ==> Engine07
+    end
+
+    Client ==> PublicService
+    AdminTools -->|"Kubernetes API :6443"| API
+    Router ==>|"服务发现与请求转发"| EngineEndpoint05
+    Router ==>|"服务发现与请求转发"| EngineEndpoint07
+
+    Scheduler -.->|"绑定 Router Pod"| Kubelet04
+    Kubelet04 -.->|"启动并维持"| Router
+    Scheduler -.->|"绑定 Pod 到 s05"| Kubelet05
+    Scheduler -.->|"绑定 Pod 到 s07"| Kubelet07
+    Agent05 -.->|"模型资产 Ready 标签"| API
+    Agent07 -.->|"模型资产 Ready 标签"| API
+
+    classDef client fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#0c4a6e
+    classDef controller fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#3b0764
+    classDef declaration fill:#ffffff,stroke:#7c3aed,stroke-width:1px,color:#3b0764
+    classDef router fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#78350f
+    classDef engine fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d
+
+    class Client,Repo,Kubeconfig,AdminTools client
+    class API,OME,ReplicaController,Scheduler,Kubelet04,Agent05,Agent07,Kubelet05,Kubelet07 controller
+    class Model,Runtime,ISVC,Workload declaration
+    class PublicService,Router,EngineEndpoint05,EngineEndpoint07 router
+    class Engine05,Engine07 engine
+
+    style S04 fill:#fafafa,stroke:#374151,stroke-width:2px
+    style S05 fill:#fafafa,stroke:#374151,stroke-width:2px
+    style S07 fill:#fafafa,stroke:#374151,stroke-width:2px
+    style Management fill:#eff6ff,stroke:#0284c7,stroke-width:2px
+    style ControlPlane fill:#f5f3ff,stroke:#a78bfa,stroke-width:1px
+    style RequestPlane fill:#fffbeb,stroke:#f59e0b,stroke-width:1px

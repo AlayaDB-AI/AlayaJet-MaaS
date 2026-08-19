@@ -1,0 +1,17 @@
+sequenceDiagram
+    participant C as 上层调用方
+    participant G as Gateway
+    participant S as Request Scheduler (EPP)
+    participant E as Engine Pod
+    participant M as Metering
+
+    C->>G: 标准推理请求
+    G->>G: 身份校验、service_id、priority、request_id
+    G->>S: SchedulingContext
+    S->>S: 排队 -> Filter -> Score -> Pick
+    S-->>G: primary endpoint + fallback endpoint
+    G->>E: 直接发送推理请求
+    E-->>G: 流式或非流式响应
+    G-->>C: 标准响应
+    G->>M: 最终请求与 Token 用量
+    E-->>S: 异步负载状态与 KV Cache 事件

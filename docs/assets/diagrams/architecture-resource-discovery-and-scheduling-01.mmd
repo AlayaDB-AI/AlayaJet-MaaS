@@ -1,0 +1,9 @@
+flowchart LR
+    Discover["① 发现设备<br/>形成逐 GPU 原始事实"]
+    Review["② 审核资源<br/>批准节点并设置型号别名"]
+    Declare["③ 声明需求<br/>Profile 指定设备与放置约束"]
+    Claim["④ 生成申请<br/>转换为 Kubernetes 设备申请"]
+    Allocate["⑤ 分配设备<br/>选择 Node 和 GPU UUID"]
+    Engine["Engine Pod<br/>获得设备并启动"]
+
+    Discover --> Review --> Declare --> Claim --> Allocate --> Engine

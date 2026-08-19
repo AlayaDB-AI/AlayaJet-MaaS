@@ -1,0 +1,22 @@
+sequenceDiagram
+    participant Customer as 客户
+    participant API as MaaS Management API
+    participant Compiler as Profile Compiler
+    participant OME as OME Controller
+    participant K8s as Kubernetes
+    participant Engine as SGLang Engine Pods
+    participant Router as SGLang Model Gateway
+    participant Gateway as Envoy AI Gateway
+
+    Customer->>API: 购买 qwen3-chat 预留容量
+    API->>API: 根据 model + capacity + SLA 选择 Profile 和实例数
+    API->>Compiler: 创建 service revision r17
+    Compiler->>OME: ClusterBaseModel + ClusterServingRuntime + InferenceService
+    Compiler->>Gateway: service_id 路由 + 容量策略
+    OME->>K8s: Engine Deployment + Router Deployment/Service
+    K8s->>Engine: 分配 16 张 H200，启动 2 个 Engine
+    K8s->>Router: 启动 SGLang Model Gateway
+    Engine-->>K8s: 模型校验和 readiness 通过
+    Router-->>OME: 发现 2 个 Ready Workers
+    OME-->>API: InferenceService Ready
+    API-->>Customer: endpoint + API key + SLA

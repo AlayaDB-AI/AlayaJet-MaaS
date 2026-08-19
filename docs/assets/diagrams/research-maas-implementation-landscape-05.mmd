@@ -1,0 +1,19 @@
+flowchart LR
+    Client["客户端"]
+    Gateway["Kubernetes Gateway"]
+    EPP["Dynamo EPP"]
+    Pool["InferencePool<br/>候选 Worker Pods"]
+    State["Dynamo Discovery + Event Plane<br/>Worker 角色、KV 和负载"]
+    Sidecar["Worker B Frontend sidecar<br/>direct 模式"]
+    Worker["Dynamo Worker B"]
+
+    Client --> Gateway
+    Gateway -->|"询问：选哪个 Worker？"| EPP
+    EPP --> Pool
+    EPP --> State
+    EPP -.->|"返回 Worker B"| Gateway
+    Gateway -->|"转发原请求"| Sidecar
+    Sidecar -->|"direct 转发"| Worker
+    Worker -.->|"流式 Token"| Sidecar
+    Sidecar -.->|"返回响应"| Gateway
+    Gateway -.-> Client

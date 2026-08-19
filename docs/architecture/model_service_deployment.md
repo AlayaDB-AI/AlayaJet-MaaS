@@ -220,23 +220,7 @@ GPU 原始属性、运维别名、混装节点、节点准入和 DRA 设备分�
 
 ## 7. 发布与可用流程
 
-```mermaid
-sequenceDiagram
-    participant O as 平台运维人员
-    participant C as Model Service Controller
-    participant K as Kubernetes
-    participant E as Engine Pods
-    participant P as InferencePool
-
-    O->>C: service_id + profile_ref + engine_instances
-    C->>C: 读取并校验 Profile
-    C->>K: 创建或更新 ResourceClaimTemplate 与 Deployment
-    C->>P: 创建或更新 InferencePool
-    K->>E: 调度并启动 Engine Pods
-    E->>E: 加载模型并执行 readiness
-    K-->>P: 汇聚 Ready endpoints
-    C-->>O: 发布状态
-```
+![7. 发布与可用流程](../assets/diagrams/architecture-model-service-deployment-01.svg)
 
 完整步骤：
 
@@ -300,36 +284,7 @@ Pod；目标节点 kubelet 负责容器终止过程。容器先执行 `preStop`�
 
 ### 9.2 优雅暂停与恢复
 
-```mermaid
-sequenceDiagram
-    participant U as 平台运维人员
-    participant C as Model Service Controller
-    participant G as Gateway
-    participant E as Engine
-    participant O as OME Controller
-    participant K as Kubernetes / kubelet
-
-    U->>C: 暂停 service_id
-    C->>C: 状态置为 draining
-    C->>G: 关闭该服务的新请求准入
-    G-->>C: 在途请求数
-    G->>E: 已接收请求继续执行
-    E-->>G: 返回剩余响应
-    G-->>C: 在途请求数为 0
-    C->>K: 删除 InferenceService
-    K->>O: InferenceService 删除事件
-    O-->>K: 完成资源终结
-    K->>E: preStop + 终止信号
-    C->>C: 状态置为 paused
-
-    U->>C: 恢复 service_id
-    C->>K: 按保留配置创建 InferenceService
-    K->>O: InferenceService 创建事件
-    O->>K: 创建 Router / Engine 工作负载
-    K-->>C: readiness 通过
-    C->>G: 恢复该服务路由
-    C->>C: 状态置为 ready
-```
+![9.2 优雅暂停与恢复](../assets/diagrams/architecture-model-service-deployment-02.svg)
 
 暂停的默认语义是优雅排空：关闭新请求准入后，已经进入 Engine 的请求继续执行。排空设置最大等待时间；
 到期后，Controller 对剩余 `request_id` 发起取消，并等待这些请求离开 Gateway 和 Engine 的在途集合。取消

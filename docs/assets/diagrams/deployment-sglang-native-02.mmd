@@ -1,0 +1,71 @@
+flowchart TD
+    Config@{ shape: doc, label: "配置文件<br/>nodes.json<br/>声明 Server、Worker 与 enabled 状态" }
+
+    Deploy@{ shape: rect, label: "部署脚本<br/>bootstrap_cluster.sh" }
+    Reconcile@{ shape: rect, label: "节点管理脚本<br/>node_manager.sh reconcile" }
+
+    ServerHost@{ shape: rounded, label: "Server 主机" }
+    ServerProcess@{ shape: stadium, label: "常驻进程<br/>k3s.service" }
+    ControlPlane@{ shape: rounded, label: "Kubernetes 控制面可用" }
+
+    DesiredState@{ shape: diamond, label: "Worker 的 enabled 状态" }
+
+    AddWorker@{ shape: rect, label: "节点管理脚本<br/>准备环境并加入集群" }
+    WorkerHost@{ shape: rounded, label: "Worker 主机" }
+    AgentProcess@{ shape: stadium, label: "常驻进程<br/>k3s-agent.service" }
+    WorkerReady@{ shape: rounded, label: "Worker Node Ready<br/>GPU 资源可调度" }
+
+    KeepWorker@{ shape: rounded, label: "节点已符合期望<br/>保持运行" }
+
+    DrainWorker@{ shape: rect, label: "节点管理脚本<br/>Cordon、Drain、删除 Node" }
+    StopAgent@{ shape: stadium, label: "停止并禁用<br/>k3s-agent.service" }
+    WorkerRemoved@{ shape: rounded, label: "Worker 退出集群<br/>不再承载 Pod" }
+
+    Platform@{ shape: rect, label: "平台部署脚本<br/>install_platform.sh" }
+    OMEProcess@{ shape: stadium, label: "OME 组件<br/>Controller：维护服务期望状态<br/>Model Agent：验证 Worker 模型资产" }
+
+    ModelConfig@{ shape: doc, label: "模型服务配置<br/>InferenceService + ServingRuntime" }
+    ModelDeploy@{ shape: rect, label: "模型部署脚本<br/>deploy_model.sh" }
+    ServingProcess@{ shape: stadium, label: "服务进程<br/>SGLang Engine + Model Gateway" }
+    Endpoint@{ shape: rounded, label: "OpenAI API 服务可用" }
+
+    Config --> Deploy
+    Deploy --> ServerHost
+    ServerHost --> ServerProcess
+    ServerProcess --> ControlPlane
+
+    ControlPlane --> Reconcile
+    Config --> Reconcile
+    Reconcile --> DesiredState
+
+    DesiredState -->|"enabled = true，节点未就绪"| AddWorker
+    AddWorker --> WorkerHost
+    WorkerHost --> AgentProcess
+    AgentProcess --> WorkerReady
+
+    DesiredState -->|"enabled = true，节点已就绪"| KeepWorker
+
+    DesiredState -->|"enabled = false"| DrainWorker
+    DrainWorker --> StopAgent
+    StopAgent --> WorkerRemoved
+
+    ControlPlane --> Platform
+    WorkerReady --> Platform
+    Platform --> OMEProcess
+
+    OMEProcess --> ModelDeploy
+    ModelConfig --> ModelDeploy
+    ModelDeploy --> ServingProcess
+    ServingProcess --> Endpoint
+
+    classDef config fill:#fff4cc,stroke:#b7791f,color:#573a00
+    classDef script fill:#dbeafe,stroke:#2563eb,color:#172554
+    classDef process fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef state fill:#f3e8ff,stroke:#9333ea,color:#3b0764
+    classDef decision fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+
+    class Config,ModelConfig config
+    class Deploy,Reconcile,AddWorker,DrainWorker,Platform,ModelDeploy script
+    class ServerProcess,AgentProcess,StopAgent,OMEProcess,ServingProcess process
+    class ServerHost,ControlPlane,WorkerHost,WorkerReady,KeepWorker,WorkerRemoved,Endpoint state
+    class DesiredState decision

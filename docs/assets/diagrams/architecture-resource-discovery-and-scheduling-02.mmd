@@ -1,0 +1,52 @@
+flowchart TB
+    Hardware["节点硬件<br/>CPU · 内存 · GPU · 网络 · 存储"]
+    Operator(["平台运维人员"])
+    Profile[("Model Service Profile<br/>设备需求 · 节点 · 资源池 · 拓扑")]
+
+    subgraph NodeComponents["NVIDIA GPU 节点组件"]
+        GFD["NFD / GFD<br/>Node 级发现"]
+        DRADriver["NVIDIA DRA Driver<br/>逐 GPU 发现 · 分配 · CDI 注入"]
+        DCGM["DCGM Exporter<br/>运行指标"]
+    end
+
+    subgraph K8s["Kubernetes 资源"]
+        ResourceSlice[("ResourceSlice<br/>UUID · productName · memory · topology")]
+        GPUDeviceClass[("DeviceClass<br/>gpu.nvidia.com")]
+        ClaimTemplate[("ResourceClaimTemplate<br/>设备属性 + count")]
+        ResourceClaim[("ResourceClaim<br/>本 Pod 的设备申请与分配结果")]
+        Node["Node<br/>pending-review / active / disabled"]
+    end
+
+    subgraph ControlPlane["Control Plane Pods"]
+        ResourceAPI["Resource Management API<br/>节点准入 · 审核 · 型号别名"]
+        AliasStore[("GPU Model Aliases<br/>别名 -> 原生属性条件")]
+        Controller["Model Service Controller"]
+    end
+
+    Scheduler["Kubernetes Scheduler"]
+    Engine["AlayaJet Inference Engine Pod"]
+
+    Hardware --> GFD
+    Hardware --> DRADriver
+    Hardware -.-> DCGM
+    DRADriver -->|"发布逐设备事实"| ResourceSlice
+    DRADriver --> GPUDeviceClass
+    GFD -->|"补充 Node 标签"| Node
+
+    ResourceSlice --> ResourceAPI
+    Operator -->|"逐卡核对与批准"| ResourceAPI
+    ResourceAPI -->|"维护节点准入状态"| Node
+    ResourceAPI -->|"版本化维护"| AliasStore
+
+    Operator -->|"发布 Profile"| Profile
+    Profile --> Controller
+    AliasStore -->|"解析并固化别名版本"| Controller
+    Controller --> ClaimTemplate
+    Controller -->|"创建 Engine 工作负载"| Scheduler
+    ClaimTemplate -->|"为每个 Pod 生成"| ResourceClaim
+    GPUDeviceClass --> ResourceClaim
+    ResourceSlice --> Scheduler
+    Node --> Scheduler
+    ResourceClaim --> Scheduler
+    Scheduler -->|"共同选择 Node 与具体 GPU"| Engine
+    DRADriver -->|"准备设备并通过 CDI 注入"| Engine
