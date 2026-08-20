@@ -1,0 +1,33 @@
+{
+  "name": "fault_recovery",
+  "description": "故障恢复负载（framework.md §4）：SIGKILL 杀掉推理服务进程，测故障检测、重启到恢复健康的时间，以及恢复后 SLO 是否回落正常",
+  "backend": "sglang-oai",
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "stages": [
+    {
+      "label": "pre-fault-8rps",
+      "request_rate": 8,
+      "num_prompts": 60,
+      "input_len": 512,
+      "output_len": 128,
+      "range_ratio": 0.5,
+      "comment": "故障前基线：稳态水位下的正常 SLO 表现"
+    },
+    {
+      "label": "post-recovery-8rps",
+      "request_rate": 8,
+      "num_prompts": 60,
+      "input_len": 512,
+      "output_len": 128,
+      "range_ratio": 0.5,
+      "inject_fault_before": "sigkill",
+      "comment": "注入 SIGKILL 后重启服务，记录恢复时间（写入本 stage 的 fault.json），然后验证恢复后 SLO"
+    }
+  ],
+  "slo": {
+    "ttft_p99_ms": 500,
+    "tpot_p99_ms": 100,
+    "e2e_p99_ms": 10000,
+    "min_success_rate": 0.999
+  }
+}

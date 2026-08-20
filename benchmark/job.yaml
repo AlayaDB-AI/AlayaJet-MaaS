@@ -1,0 +1,69 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __JOB_NAME__
+  namespace: __NAMESPACE__
+  labels:
+    alayajet.io/benchmark-run: __RUN_ID__
+    alayajet.io/benchmark-stage: __STAGE_LABEL__
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        alayajet.io/benchmark-run: __RUN_ID__
+        alayajet.io/benchmark-stage: __STAGE_LABEL__
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        alayajet.io/role: gpu-worker
+      containers:
+        - name: bench
+          image: docker.io/lmsysorg/sglang:v0.5.2-cu126
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+              python3 -m sglang.bench_serving \
+                --backend __BACKEND__ \
+                --host __HOST__ \
+                --port __PORT__ \
+                --model __MODEL__ \
+                --tokenizer /models/__MODEL__ \
+                --dataset-name random-ids \
+                --random-input-len __INPUT_LEN__ \
+                --random-output-len __OUTPUT_LEN__ \
+                --random-range-ratio __RANGE_RATIO__ \
+                --num-prompts __NUM_PROMPTS__ \
+                --request-rate __REQUEST_RATE__ \
+                --max-concurrency __MAX_CONCURRENCY__ \
+                --warmup-requests 0 \
+                --disable-tqdm \
+                --output-file /tmp/result.json \
+                --output-details
+              echo "===BENCH_RESULT_JSON_BEGIN==="
+              cat /tmp/result.json
+              echo "===BENCH_RESULT_JSON_END==="
+              if [ -f /tmp/result_details.jsonl ]; then
+                echo "===BENCH_DETAILS_JSONL_BEGIN==="
+                cat /tmp/result_details.jsonl
+                echo "===BENCH_DETAILS_JSONL_END==="
+              fi
+          resources:
+            requests:
+              cpu: "4"
+              memory: 8Gi
+            limits:
+              cpu: "8"
+              memory: 16Gi
+          volumeMounts:
+            - name: models
+              mountPath: /models
+              readOnly: true
+      volumes:
+        - name: models
+          hostPath:
+            path: /mnt/data/models
+            type: Directory

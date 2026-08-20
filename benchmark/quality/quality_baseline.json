@@ -1,0 +1,15 @@
+{
+  "model": "Qwen/Qwen3-8B",
+  "frozen_from_run": "quality-20260814-201506",
+  "frozen_at": "2026-08-14",
+  "deployment": "standalone sglang 0.5.10, TP=1, RTX4090-48G, fp16, no optimization",
+  "decode_params": "temperature=0, enable_thinking=False",
+  "thresholds": {
+    "gsm8k": 0.93,
+    "ifeval": 0.8609,
+    "longbench_v2": 0.39,
+    "niah": 1.0
+  },
+  "tolerance": 0.02,
+  "rule": "变更后重跑 Tier1(+longbench_v2)，各 suite 分数 >= baseline - tolerance 即 quality_pass"
+}
