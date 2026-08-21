@@ -1,0 +1,22 @@
+{
+  "name": "decode_heavy",
+  "description": "decode 重负载：短输入长输出，测 decode 吞吐与 TPOT 稳定性",
+  "backend": "sglang-oai",
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "stages": [
+    {
+      "label": "dec-4rps",
+      "request_rate": 4,
+      "num_prompts": 80,
+      "input_len": 128,
+      "output_len": 1024,
+      "range_ratio": 0.5
+    }
+  ],
+  "slo": {
+    "ttft_p99_ms": 500,
+    "tpot_p99_ms": 100,
+    "e2e_p99_ms": 60000,
+    "min_success_rate": 0.999
+  }
+}

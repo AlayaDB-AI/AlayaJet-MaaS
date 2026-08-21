@@ -1,1 +1,10 @@
 .DS_Store
+logs/
+__pycache__/
+*.pyc
+
+# 真实会话日志及其转换产物（含业务数据，禁止提交；仓库里只允许脱敏样例 sample.jsonl）
+会话数据*.ndjson
+benchmark/traces/business-*.jsonl
+benchmark/traces/_smoke*.json
+benchmark/workloads/trace_business.json

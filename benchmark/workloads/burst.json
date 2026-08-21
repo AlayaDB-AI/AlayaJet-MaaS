@@ -1,0 +1,31 @@
+{
+  "name": "burst",
+  "description": "突发负载：高速率短促冲击，观察排队深度、TTFT 恶化与恢复",
+  "backend": "sglang-oai",
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "stages": [
+    {
+      "label": "burst-32rps",
+      "request_rate": 32,
+      "num_prompts": 96,
+      "input_len": 512,
+      "output_len": 128,
+      "range_ratio": 0.5
+    },
+    {
+      "label": "recovery-8rps",
+      "request_rate": 8,
+      "num_prompts": 60,
+      "input_len": 512,
+      "output_len": 128,
+      "range_ratio": 0.5,
+      "comment": "突发后立即回到稳态速率，验证延迟是否回落（回涌后二次过载检测）"
+    }
+  ],
+  "slo": {
+    "ttft_p99_ms": 500,
+    "tpot_p99_ms": 100,
+    "e2e_p99_ms": 10000,
+    "min_success_rate": 0.999
+  }
+}

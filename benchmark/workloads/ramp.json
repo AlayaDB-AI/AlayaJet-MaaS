@@ -1,0 +1,103 @@
+{
+  "name": "ramp",
+  "description": "阶梯加压：逐级翻倍找到容量拐点（offered load vs accepted goodput 的膝盖）。early_stop_after_fails=2：连续 2 档 SLO 失败后终止后续档位（深度过饱和由 overload 负责）",
+  "backend": "sglang-oai",
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "early_stop_after_fails": 2,
+  "stages": [
+    {
+      "label": "r1",
+      "request_rate": 1,
+      "num_prompts": 30,
+      "input_len": 512,
+      "output_len": 128,
+      "range_ratio": 0.5
+    },
+    {
+      "label": "r2",
+      "request_rate": 2,
+      "num_prompts": 40,
+      "input_len": 512,
+      "output_len": 128,
+      "range_ratio": 0.5
+    },
+    {
+      "label": "r4",
+      "request_rate": 4,
+      "num_prompts": 60,
+      "input_len": 512,
+      "output_len": 128,
+      "range_ratio": 0.5
+    },
+    {
+      "label": "r8",
+      "request_rate": 8,
+      "num_prompts": 80,
+      "input_len": 512,
+      "output_len": 128,
+      "range_ratio": 0.5
+    },
+    {
+      "label": "r16",
+      "request_rate": 16,
+      "num_prompts": 96,
+      "input_len": 512,
+      "output_len": 128,
+      "range_ratio": 0.5
+    },
+    {
+      "label": "r32",
+      "request_rate": 32,
+      "num_prompts": 128,
+      "input_len": 512,
+      "output_len": 128,
+      "range_ratio": 0.5
+    },
+    {
+      "label": "r64",
+      "request_rate": 64,
+      "num_prompts": 160,
+      "input_len": 512,
+      "output_len": 128,
+      "range_ratio": 0.5
+    },
+    {
+      "label": "r96",
+      "request_rate": 96,
+      "num_prompts": 192,
+      "input_len": 512,
+      "output_len": 128,
+      "range_ratio": 0.5
+    },
+    {
+      "label": "r128",
+      "request_rate": 128,
+      "num_prompts": 256,
+      "input_len": 512,
+      "output_len": 128,
+      "range_ratio": 0.5
+    },
+    {
+      "label": "r192",
+      "request_rate": 192,
+      "num_prompts": 288,
+      "input_len": 512,
+      "output_len": 128,
+      "range_ratio": 0.5
+    },
+    {
+      "label": "r256",
+      "request_rate": 256,
+      "num_prompts": 384,
+      "input_len": 512,
+      "output_len": 128,
+      "range_ratio": 0.5
+    }
+  ],
+  "slo": {
+    "ttft_p99_ms": 500,
+    "tpot_p99_ms": 100,
+    "e2e_p99_ms": 10000,
+    "min_success_rate": 0.999
+  }
+}

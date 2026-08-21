@@ -1,0 +1,22 @@
+{
+  "name": "steady",
+  "description": "稳态负载：恒定速率打满 30 秒以上，测稳态 SLO 与 accepted goodput",
+  "backend": "sglang-oai",
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "stages": [
+    {
+      "label": "steady-8rps",
+      "request_rate": 8,
+      "num_prompts": 240,
+      "input_len": 512,
+      "output_len": 128,
+      "range_ratio": 0.5
+    }
+  ],
+  "slo": {
+    "ttft_p99_ms": 500,
+    "tpot_p99_ms": 100,
+    "e2e_p99_ms": 10000,
+    "min_success_rate": 0.999
+  }
+}
