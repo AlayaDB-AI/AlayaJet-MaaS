@@ -33,7 +33,8 @@
 配置文件 `benchmark/trace_env.json` 的字段与上表同名（snake_case）：
 `ssh / model / model_path / template / context / port / tp / trace / time_scale /
 server_log / start_server / keep_server / wait_ready_s / client_timeout_s /
-notes`。换机器/换模型就是编辑这些字段，或复制一份用 `--env` 指向。
+remote_python / notes`。换机器/换模型就是编辑这些字段，或复制一份用 `--env`
+指向。
 
 两类容易写错的：
 

@@ -168,6 +168,11 @@ def main():
             # 该行的 completion_tokens 已冗余记录本轮的回复长度；
             # 缺失时再向后找紧随的 assistant_message 兜底。
             reply_len = e.get("completion_tokens")
+            if reply_len:
+                try:
+                    reply_len = int(reply_len)
+                except (TypeError, ValueError):
+                    reply_len = 0
             if not reply_len:
                 for later in events[idx + 1:]:
                     if later.get("event_type") == "user_message":

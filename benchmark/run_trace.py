@@ -41,9 +41,13 @@ def run_local(cmd, check=True, capture=False):
 
 
 def ssh(host, remote_cmd, capture=False):
-    r = subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, remote_cmd],
-        capture_output=capture, text=True)
+    try:
+        r = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, remote_cmd],
+            capture_output=capture, text=True, stdin=subprocess.DEVNULL, timeout=90)
+    except subprocess.TimeoutExpired:
+        r = subprocess.CompletedProcess(
+            [], 124, stdout="", stderr="ssh timeout")
     return r
 
 
@@ -68,7 +72,7 @@ def start_server(args):
     if args.tp > 1:
         extra = "--disable-custom-all-reduce --mm-feature-transport cpu"
     cmd = (
-        "cd ~/trace-run && "
+        "{{ mkdir -p ~/trace-run && cd ~/trace-run && "
         "FLASHINFER_DISABLE_VERSION_CHECK=1 nohup ~/sglang-env/bin/python "
         "-m sglang.launch_server "
         "--model-path {model_path} "
@@ -77,14 +81,22 @@ def start_server(args):
         "--host 0.0.0.0 --port {port} --tp {tp} {extra} "
         "--context-length {context} --mem-fraction-static 0.88 "
         "--sampling-defaults model "
-        "> ~/sglang-trace.log 2>&1 & echo started pid=$!"
+        "</dev/null > ~/sglang-trace.log 2>&1 & "
+        "echo $! > ~/trace-run/server.pid; wait; }} "
+        "</dev/null >/dev/null 2>&1 & echo launched"
     ).format(model_path=args.model_path, model=args.model, template=args.template,
              port=args.port, tp=args.tp, extra=extra, context=args.context)
     r = ssh(args.ssh, cmd, capture=True)
-    if r.returncode != 0 or "started" not in r.stdout:
+    if r.returncode != 0 or "launched" not in r.stdout:
         raise SystemExit("服务启动命令失败: {}".format(r.stderr or r.stdout))
-    m = re.search(r"pid=(\d+)", r.stdout)
-    args._launched_pid = int(m.group(1)) if m else None
+    args._launched_pid = None
+    for _ in range(10):
+        time.sleep(1)
+        pr = ssh(args.ssh, "cat ~/trace-run/server.pid 2>/dev/null", capture=True)
+        pid_line = (pr.stdout or "").strip()
+        if pid_line.isdigit():
+            args._launched_pid = int(pid_line)
+            break
     print("[run_trace] server launching on {}:{} (pid={})".format(
         args.ssh, args.port, args._launched_pid))
 
@@ -92,9 +104,39 @@ def start_server(args):
 def stop_server(args):
     pid = getattr(args, "_launched_pid", None)
     if pid:
-        ssh(args.ssh, "kill {} 2>/dev/null || true".format(pid))
-    time.sleep(3)
-    print("[run_trace] server stopped")
+        # sglang 的 scheduler 子进程不随主进程退出，需要按进程组整组杀；
+        # 非交互 ssh 会话里整棵树共用一个进程组，不会误伤其他会话。
+        pg = ssh(args.ssh, "ps -o pgid= -p {pid} | tr -d ' '".format(pid=pid),
+                 capture=True)
+        pgid = (pg.stdout or "").strip()
+        if pgid.isdigit():
+            ssh(args.ssh,
+                "kill -- -{pgid} 2>/dev/null || true; sleep 6; "
+                "kill -9 -- -{pgid} 2>/dev/null || true; "
+                "rm -f ~/trace-run/server.pid".format(pgid=pgid))
+        else:
+            ssh(args.ssh, "kill -9 {pid} 2>/dev/null || true; "
+                          "rm -f ~/trace-run/server.pid".format(pid=pid))
+        time.sleep(3)
+        if port_listening(args.ssh, args.port):
+            print("[run_trace] WARNING: 端口 {} 仍在监听，服务可能未停干净"
+                  .format(args.port))
+        else:
+            print("[run_trace] server stopped (pid={})".format(pid))
+    else:
+        print("[run_trace] no server pid tracked, nothing to stop")
+
+
+def ensure_remote_template(args):
+    """远端没有配置的 chat 模板时，把仓库自带的 developer 兼容模板传过去。"""
+    r = ssh(args.ssh, "test -f {} && echo yes".format(args.template), capture=True)
+    if "yes" in r.stdout:
+        return
+    local_tpl = os.path.join(REPO_ROOT, "benchmark", "traces",
+                             "qwen35-chat-template.jinja")
+    if os.path.isfile(local_tpl):
+        print("[run_trace] uploading chat template to {}".format(args.template))
+        scp(local_tpl, "{}:{}".format(args.ssh, args.template))
 
 
 _LOG_TS = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]")
@@ -150,6 +192,8 @@ def main():
                     help="结束后保留服务（默认：由本次启动的服务会被停掉）")
     ap.add_argument("--wait-ready-s", type=int, default=None)
     ap.add_argument("--client-timeout-s", type=int, default=None)
+    ap.add_argument("--remote-python", default=None,
+                    help="执行机上的 python 命令（默认 python3）")
     ap.add_argument("--note", action="append", default=None)
     args = ap.parse_args()
 
@@ -186,6 +230,7 @@ def main():
     args.start_server = pick("start_server", cfg.get("start_server", "auto"))
     args.wait_ready_s = pick("wait_ready_s", cfg.get("wait_ready_s", 600))
     args.client_timeout_s = pick("client_timeout_s", cfg.get("client_timeout_s", 900))
+    args.remote_python = pick("remote_python", cfg.get("remote_python", "python3"))
     args.keep_server = (args.keep_server if args.keep_server is not None
                         else bool(cfg.get("keep_server", False)))
     cfg_notes = cfg.get("notes") or []
@@ -199,6 +244,10 @@ def main():
     if args.time_scale <= 0:
         raise SystemExit("--time-scale 必须 > 0")
 
+    for tool in ("ssh", "scp"):
+        if not shutil.which(tool):
+            raise SystemExit("本机没有 {} 命令，请先安装 OpenSSH 客户端".format(tool))
+
     if args.show_config:
         print(json.dumps({
             "env": args.env, "ssh": args.ssh, "model": args.model,
@@ -209,11 +258,18 @@ def main():
             "keep_server": args.keep_server,
             "wait_ready_s": args.wait_ready_s,
             "client_timeout_s": args.client_timeout_s,
+            "remote_python": args.remote_python,
             "notes": args.note,
         }, ensure_ascii=False, indent=2))
         return
 
-    if not os.path.isfile(args.trace):
+    trace_found = False
+    for cand in (args.trace, os.path.join(REPO_ROOT, args.trace)):
+        if cand and os.path.isfile(cand):
+            args.trace = cand
+            trace_found = True
+            break
+    if not trace_found:
         raise SystemExit(
             "找不到 trace 文件: {}\n"
             "可用转换器生成，例如：\n"
@@ -221,6 +277,7 @@ def main():
             "-o benchmark/traces/my-15min.jsonl --window-s 900".format(args.trace))
 
     run_id = "trace-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_started_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     run_dir = os.path.join(REPO_ROOT, "benchmark", "runs", run_id)
     os.makedirs(run_dir, exist_ok=True)
 
@@ -236,6 +293,7 @@ def main():
             ssh(args.ssh, "pkill -f 'sglang.launch_server.*--port {} ' || true".format(args.port))
             time.sleep(3)
             started_by_us = True
+            ensure_remote_template(args)
             start_server(args)
         elif code == "200":
             print("[run_trace] reuse running server {}:{}".format(args.ssh, args.port))
@@ -245,6 +303,7 @@ def main():
         else:
             print("[run_trace] starting server (tp={}, port={})...".format(args.tp, args.port))
             started_by_us = True
+            ensure_remote_template(args)
             start_server(args)
 
         # 统一等待就绪：无论服务是自己启动还是别人正在加载
@@ -268,16 +327,17 @@ def main():
         # 3) 回放（输出直接透传到本机控制台，能看到实时进度）
         print("[run_trace] replay started, run_id={}".format(run_id))
         run_cmd = (
-            "cd ~/trace-run && python3 trace_client.py "
+            "cd ~/trace-run && {rpy} trace_client.py "
             "--url http://127.0.0.1:{port} --model {model} "
             "--trace-file trace-input.jsonl --num-prompts -1 "
             "--time-scale {scale} --timeout-s {to} "
             "--output-file raw_result_{run_id}.json"
         ).format(port=args.port, model=args.model, scale=args.time_scale,
-                 to=args.client_timeout_s, run_id=run_id)
+                 to=args.client_timeout_s, run_id=run_id, rpy=args.remote_python)
         replay_start = datetime.now(timezone.utc)
         r = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", args.ssh, run_cmd], text=True)
+            ["ssh", "-o", "BatchMode=yes", args.ssh, run_cmd],
+            text=True, stdin=subprocess.DEVNULL)
         replay_end = datetime.now(timezone.utc)
         if r.returncode != 0:
             raise SystemExit("回放失败，请查看远端 ~/trace-run/ 与服务日志")
@@ -315,7 +375,8 @@ def main():
             result = json.load(f)
         meta = {
             "run_id": run_id,
-            "started_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            "started_at": run_started_at,
+            "finished_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
             "ssh": args.ssh, "model": args.model, "tp": args.tp,
             "port": args.port, "context": args.context,
             "trace": args.trace, "time_scale": args.time_scale,

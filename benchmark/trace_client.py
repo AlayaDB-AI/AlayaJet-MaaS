@@ -137,6 +137,8 @@ def one_request(url, endpoint, payload, timeout_s, idx):
     try:
         with _OPENER.open(req, timeout=timeout_s) as resp:
             for raw in resp:
+                if time.perf_counter() - t0 > timeout_s:
+                    raise TimeoutError()
                 text = raw.decode("utf-8", "replace").strip()
                 if not text.startswith("data:"):
                     continue

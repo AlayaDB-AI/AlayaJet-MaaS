@@ -13,5 +13,6 @@
   "keep_server": false,
   "wait_ready_s": 600,
   "client_timeout_s": 900,
+  "remote_python": "python3",
   "notes": []
 }
