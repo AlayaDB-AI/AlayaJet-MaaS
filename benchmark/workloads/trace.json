@@ -1,0 +1,26 @@
+{
+  "name": "trace",
+  "description": "真实业务流量重放（framework.md §4）：按 trace 文件中的到达时间戳与完整请求体重放生产流量，测真实流量形态下的 SLO 与吞吐。仅 standalone runner（run_local_benchmark.sh / evaluate.sh --attach）支持，K8s Job 执行器暂不支持",
+  "backend": "sglang-oai-chat",
+  "model": "Qwen/Qwen3.8-27B-FP8",
+  "dataset_name": "trace",
+  "trace_file": "benchmark/traces/sample.jsonl",
+  "time_scale": 1.0,
+  "stages": [
+    {
+      "label": "replay-1x",
+      "request_rate": 8,
+      "num_prompts": 3,
+      "input_len": 512,
+      "output_len": 128,
+      "range_ratio": 0.5,
+      "comment": "num_prompts 应 <= trace 行数且建议等于实际重放行数（判定口径 completed/num_prompts）；trace 行缺 ts 时才用 request_rate 做泊松到达"
+    }
+  ],
+  "slo": {
+    "ttft_p99_ms": 2000,
+    "tpot_p99_ms": 100,
+    "e2e_p99_ms": 30000,
+    "min_success_rate": 0.99
+  }
+}

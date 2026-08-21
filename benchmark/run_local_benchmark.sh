@@ -71,13 +71,26 @@ ssh -o BatchMode=yes "$BENCH_SSH" \
   "nvidia-smi -q | sed -n '1,80p'" \
   > "$RUN_DIR/machine_snapshot.txt" 2>/dev/null || true
 
-read -r BACKEND MODEL STAGE_COUNT EARLY_STOP_AFTER < <("$PYTHON_BIN" -c "
+read -r BACKEND MODEL STAGE_COUNT EARLY_STOP_AFTER TRACE_FILE TIME_SCALE < <("$PYTHON_BIN" -c "
 import json, sys
 w = json.load(open(sys.argv[1], encoding='utf-8'))
 print(w.get('backend', 'sglang-oai'), w['model'], len(w['stages']),
-      w.get('early_stop_after_fails', 0))
+      w.get('early_stop_after_fails', 0),
+      w.get('trace_file') or '-', w.get('time_scale', 1.0))
 " "$WORKLOAD_FILE" | tr -d '\r')
 MODEL=${MODEL_NAME:-$MODEL}
+[ "$TRACE_FILE" = "-" ] && TRACE_FILE=
+TRACE_FILE=${TRACE_PATH:-$TRACE_FILE}
+TIME_SCALE=${TRACE_TIME_SCALE:-$TIME_SCALE}
+
+# trace 重放的 trace 文件路径：相对路径按仓库根目录解析，绝对路径原样使用
+TRACE_SRC=
+if [ -n "$TRACE_FILE" ]; then
+  case "$TRACE_FILE" in
+    /*) TRACE_SRC="$TRACE_FILE" ;;
+    *) TRACE_SRC="$ROOT_DIR/$TRACE_FILE" ;;
+  esac
+fi
 
 if [ "${BENCH_CLIENT:-remote}" = "local" ]; then
   # 本机访问服务的地址无法从被测机推导，不能给写死的默认值
@@ -160,6 +173,9 @@ trap stop_samplers EXIT
 
 # ---- 逐 stage 执行 ----
 CONSEC_FAIL=0
+TRACE_STAGE_DIRS=""
+TRACE_ARGS=()
+[ -n "$TRACE_SRC" ] && TRACE_ARGS=(--trace "$TRACE_SRC")
 for ((i = 0; i < STAGE_COUNT; i++)); do
   read -r LABEL NUM_PROMPTS REQUEST_RATE INPUT_LEN OUTPUT_LEN RANGE_RATIO DATASET EXTRA_ARGS INJECT < <("$PYTHON_BIN" -c "
 import json, sys
@@ -232,10 +248,32 @@ EOF
   fi
 
   # request_rate 可能带小数，不能用 bash 整数运算
-  WAIT_TIMEOUT=$("$PYTHON_BIN" -c "
+  if [ "$DATASET" = "trace" ] && [ -n "$TRACE_SRC" ]; then
+    # trace 按文件内 ts 调度，运行时长由 (max_ts-min_ts)/time_scale 决定，
+    # 不能用 num_prompts/request_rate 估算；取两种口径的较大值再加缓冲。
+    WAIT_TIMEOUT=$("$PYTHON_BIN" -c "
+import json, sys
+ts = []
+for line in open(sys.argv[1], encoding='utf-8'):
+    line = line.strip()
+    if not line or line.startswith('#'):
+        continue
+    try:
+        o = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if isinstance(o.get('ts'), (int, float)):
+        ts.append(o['ts'])
+scale = float(sys.argv[2]); n = float(sys.argv[3]); r = float(sys.argv[4])
+span = (max(ts) - min(ts)) / scale if len(ts) >= 2 else 0
+print(int(max(span * 2 + 3600, n / r * 3 + 1200)) + 1)
+" "$TRACE_SRC" "$TIME_SCALE" "$NUM_PROMPTS" "$REQUEST_RATE" | tr -d '\r')
+  else
+    WAIT_TIMEOUT=$("$PYTHON_BIN" -c "
 import sys
 n = float('$NUM_PROMPTS'); r = float('$REQUEST_RATE')
 print(int(n / r * 3 + 1200) + 1)")
+  fi
   REMOTE_BASE="/tmp/bench_${RUN_ID}_$(printf '%02d' "$i")_${LABEL}"
 
   echo "-- stage $i [$LABEL]: rate=${REQUEST_RATE}/s prompts=$NUM_PROMPTS dataset=$DATASET (timeout ${WAIT_TIMEOUT}s)"
@@ -249,7 +287,45 @@ print(int(n / r * 3 + 1200) + 1)")
   for STAGE_ATTEMPT in 1 2; do
     [ "$STAGE_ATTEMPT" -gt 1 ] && echo "   stage 重试（$STAGE_ATTEMPT/2，疑似瞬时故障）..."
     STAGE_OK=true
-    if [ "${BENCH_CLIENT:-remote}" = "local" ]; then
+    if [ "$DATASET" = "trace" ]; then
+      # 真实业务流量重放（framework.md §4）：按 trace 时间戳调度，完整请求体原样发送。
+      # local=本机发（含网络段）；remote=执行机 loopback 发（纯服务端性能）。
+      if [ -z "$TRACE_SRC" ] || [ ! -f "$TRACE_SRC" ]; then
+        echo "trace 数据集必须提供有效的 trace_file（当前: ${TRACE_FILE:-空}）" >&2
+        STAGE_OK=false
+      fi
+      if [ "$STAGE_OK" = true ] && [ "${BENCH_CLIENT:-remote}" = "local" ]; then
+        [ -n "${E2E_TARGET:-}" ] || { echo "trace + BENCH_CLIENT=local 必须设置 E2E_TARGET" >&2; STAGE_OK=false; }
+        if [ "$STAGE_OK" = true ]; then
+          timeout "${WAIT_TIMEOUT}s" "$PYTHON_BIN" "$SCRIPT_DIR/trace_client.py" \
+            --url "$E2E_TARGET" --model "$MODEL" \
+            --trace-file "$TRACE_SRC" \
+            --num-prompts "$NUM_PROMPTS" \
+            --request-rate "$REQUEST_RATE" \
+            --time-scale "$TIME_SCALE" \
+            --output-file "$STAGE_DIR/raw_result.json" > "$STAGE_DIR/bench.log" 2>&1 \
+            || STAGE_OK=false
+        fi
+      elif [ "$STAGE_OK" = true ]; then
+        TRACE_REMOTE="/tmp/trace_${RUN_ID}_$(printf '%02d' "$i").jsonl"
+        CLIENT_REMOTE="/tmp/trace_client_${RUN_ID}.py"
+        scp -q -o BatchMode=yes "$TRACE_SRC" "$BENCH_SSH:$TRACE_REMOTE" 2>/dev/null || STAGE_OK=false
+        scp -q -o BatchMode=yes "$SCRIPT_DIR/trace_client.py" "$BENCH_SSH:$CLIENT_REMOTE" 2>/dev/null || STAGE_OK=false
+        if [ "$STAGE_OK" = true ]; then
+          ssh -o BatchMode=yes "$BENCH_SSH" \
+            "$VENV_PATH/bin/python3" "$CLIENT_REMOTE" \
+            --url "http://$BENCH_HOST:$BENCH_PORT" --model "$MODEL" \
+            --trace-file "$TRACE_REMOTE" \
+            --num-prompts "$NUM_PROMPTS" \
+            --request-rate "$REQUEST_RATE" \
+            --time-scale "$TIME_SCALE" \
+            --output-file "${REMOTE_BASE}.json" \
+            > "$STAGE_DIR/bench.log" 2>&1 || STAGE_OK=false
+          scp -q -o BatchMode=yes "$BENCH_SSH:${REMOTE_BASE}.json" "$STAGE_DIR/raw_result.json" 2>/dev/null || true
+          ssh -o BatchMode=yes "$BENCH_SSH" "rm -f '$TRACE_REMOTE' '$CLIENT_REMOTE' '${REMOTE_BASE}.json'" >/dev/null 2>&1 || true
+        fi
+      fi
+    elif [ "${BENCH_CLIENT:-remote}" = "local" ]; then
       # E2E 模式：负载从本机（被测机器之外）发出，经真实网络到服务（framework §6）
       timeout "${WAIT_TIMEOUT}s" "$PYTHON_BIN" "$SCRIPT_DIR/e2e_client.py" \
         --url "$E2E_TARGET" --model "$MODEL" \
@@ -296,7 +372,7 @@ REMOTE
 
     fi  # BENCH_CLIENT 分支结束
 
-    if [ "${BENCH_CLIENT:-remote}" != "local" ]; then
+    if [ "$DATASET" != "trace" ] && [ "${BENCH_CLIENT:-remote}" != "local" ]; then
     scp -q -o BatchMode=yes "$BENCH_SSH:${REMOTE_BASE}.json" "$STAGE_DIR/raw_result.json" 2>/dev/null || true
     ssh -o BatchMode=yes "$BENCH_SSH" "rm -f '${REMOTE_BASE}.json'" >/dev/null 2>&1 || true
     fi
@@ -352,6 +428,18 @@ with open(sys.argv[2], 'w', encoding='utf-8') as f:
 " "$STAGE_DIR/raw_result.json" "$STAGE_DIR/requests.jsonl" || true
   fi
 
+  # 每次 trace 回放自动生成一份 Markdown 报告（服务端日志在收尾时补全）
+  if [ "$RAW_OK" = true ] && [ "$DATASET" = "trace" ]; then
+    "$PYTHON_BIN" "$SCRIPT_DIR/trace_report.py" \
+      --result "$STAGE_DIR/raw_result.json" \
+      "${TRACE_ARGS[@]}" \
+      --model "$MODEL" \
+      --output "$STAGE_DIR/report.md" \
+      --note "workload=${WORKLOAD_NAME} stage=${i} label=${LABEL} time_scale=${TIME_SCALE}" \
+      >/dev/null 2>&1 || true
+    TRACE_STAGE_DIRS="$TRACE_STAGE_DIRS $STAGE_DIR"
+  fi
+
   [ "$RAW_OK" = true ] && [ "$STAGE_OK" = true ] || STAGE_OK=false
   echo "$STAGE_OK" > "$STAGE_DIR/stage_ok.txt"
   [ "$STAGE_OK" = true ] || echo "   stage 未正常完成，保留 bench.log 现场"
@@ -379,6 +467,21 @@ done
 
 # ---- 先停采样并拉回数据，再汇总（顺序不能反：collect 依赖采样产物）----
 stop_samplers
+
+# ---- 归档 server.log 后，给 trace 报告补上服务端观测 ----
+if [ -n "$TRACE_STAGE_DIRS" ] && [ -s "$RUN_DIR/logs/server.log" ]; then
+  for sd in $TRACE_STAGE_DIRS; do
+    [ -f "$sd/raw_result.json" ] || continue
+    "$PYTHON_BIN" "$SCRIPT_DIR/trace_report.py" \
+      --result "$sd/raw_result.json" \
+      "${TRACE_ARGS[@]}" \
+      --model "$MODEL" \
+      --server-log "$RUN_DIR/logs/server.log" \
+      --output "$sd/report.md" \
+      --note "workload=${WORKLOAD_NAME} time_scale=${TIME_SCALE}" \
+      >/dev/null 2>&1 || true
+  done
+fi
 
 # ---- 汇总判定 ----
 "$PYTHON_BIN" "$SCRIPT_DIR/collect_results.py" "$RUN_DIR"

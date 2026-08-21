@@ -65,6 +65,7 @@ E2E_TARGET=http://<服务在本机可达的地址>:<端口> \
 | `E2E_TARGET` | `--e2e-local` 时本机访问服务的地址，必填 |
 | `GPU_INDEX` / `SERVER_TP` | dmon 采样哪张卡 / 故障恢复重启时用的 TP（evaluate.sh 自动传） |
 | `PYTHON_BIN` | 覆盖本机 Python 解释器 |
+| `TRACE_PATH` / `TRACE_TIME_SCALE` | `trace` workload 覆盖 trace 文件路径 / 时间缩放（默认取 workload json） |
 
 ## 3. 单独跑一个 workload
 
@@ -85,8 +86,9 @@ BENCH_CLIENT=local E2E_TARGET=http://<服务地址>:<端口> \
 可用 workload（`benchmark/workloads/*.json`）：`steady`（稳态）、`ramp`（阶梯找拐点）、
 `burst`（突发+恢复）、`overload`（过饱和）、`rag_prefix`（共享前缀）、`longctx`（长上下文）、
 `decode_heavy`（长输出）、`fault_recovery`（故障恢复）、`multimodal`（多模态，**仅 VL 模型、
-仅 remote 模式**，需 `MODEL_NAME`/`TOKENIZER_PATH` 指向 VL 模型）。每个 workload 的用途
-与设计理由见 §4。
+仅 remote 模式**，需 `MODEL_NAME`/`TOKENIZER_PATH` 指向 VL 模型）、`trace`（真实业务流量
+重放，数据格式见 `benchmark/traces/README.md`，仅 standalone runner）。每个 workload 的
+用途与设计理由见 §4。
 `sustain*.json` 是早期容量探索遗留，一般不用。
 
 断点续跑：同一 run-id 重跑会跳过已完成的 stage——
@@ -96,8 +98,9 @@ BENCH_CLIENT=local E2E_TARGET=http://<服务地址>:<端口> \
 
 ## 4. Workload 一览与设计理由
 
-所有 workload 都定义在 `benchmark/workloads/*.json`，都是**合成负载**：随机 token id、
-长度精确可控，隔离掉数据集内容的影响，只测引擎/调度/网络的性能；质量维度由 §5 的
+所有 workload 都定义在 `benchmark/workloads/*.json`。除 `trace` 外都是**合成负载**：
+随机 token id、长度精确可控，隔离掉数据集内容的影响，只测引擎/调度/网络的性能；
+`trace` 是真实业务流量重放，用来验证生产流量形态下的 SLO 与吞吐。质量维度由 §5 的
 质量 suites 单独覆盖。判定统一走 `framework.md` §2 的四级语义：
 `request_success → slo_pass → quality_pass（无 ground truth 时为 None）→ accepted`。
 
@@ -242,6 +245,38 @@ BENCH_CLIENT=local E2E_TARGET=http://<服务地址>:<端口> \
 - 图像 prefill 重，速率保守，TTFT/E2E 阈值放宽到 2 s / 15 s；
 - 只支持 remote 模式：E2E 客户端只发 token id、不带图；
 - 必须用 `MODEL_NAME`/`TOKENIZER_PATH` 指向 VL 模型；纯文本模型评估时该项标记为 n/a。
+
+### trace —— 真实业务流量重放
+
+| stage | 到达节奏 | 请求体 | 数据来源 |
+|---|---|---|---|
+| replay-1x | 按 trace 的 `ts` 原样重放（可 `time_scale` 整体缩放） | 完整 OpenAI 请求体（多轮/图片/采样参数） | `trace_file` 指定的 JSONL |
+
+回答：**生产流量形态（真实内容、长度分布、到达节奏、多轮/多模态/采样参数）下，服务能不能满足 SLO，吞吐和错误率是多少。**
+
+为什么这样设计：
+
+- 合成 workload 回答“引擎能力”，trace 回答“业务可用性”：真实长尾内容会触发随机 token
+  碰不到的问题（超长/特殊格式 prompt、多轮累积、图片、思考链）；
+- 到达节奏按 trace 的时间戳重放而不是泊松近似，还原生产的突发与间隔；`time_scale=2.0`
+  即整体 2 倍速，方便快速回归；
+- 请求体原样发送：`body` 或 `messages+params` 两种写法，`image_url` 的 http(s) 链接由
+  客户端拉取转 data URL；逐请求温度等参数保真；
+- `min_success_rate` 用 0.99 而非合成负载的 0.999：内容型边缘错误和容量不足要分开看，
+  错误率本身就是该 workload 的观测指标；
+- 数据格式、日志转换与“怎么跑一次真实业务 trace”的完整步骤见
+  `benchmark/traces/README.md`（仓库只放脱敏样例）；**真实业务测试统一走
+  `python benchmark/run_trace.py` 这一条端到端入口**，产物固定为
+  `runs/trace-<时间戳>/` 下的 `raw_result.json / report.md / server.log /
+  run_meta.json / trace-input.jsonl`；
+- 仓库根目录的 `会话数据1.ndjson` 可用内置 `log_to_trace.py` 一键转成脱敏 trace，
+  已通过 2262 条真实会话数据验证；
+- 每次 trace 回放自动生成一份 Markdown 报告（`run_trace.py` 落在 run 根目录，
+  旧 runner 落在 `stages/*/report.md`），汇总成功率、吞吐、延迟分位数、到达节奏
+  与失败明细；
+- 仅 standalone runner（`run_local_benchmark.sh` / `evaluate.sh --attach`）支持，K8s Job
+  执行器暂未接入；不做时间戳保真时，也可直接用 bench_serving 的 `sharegpt`/`agentic-trace`
+  数据集 + `extra_args`（零代码方案，见 traces README）。
 
 ### sustain / sustain2 / sustain3 —— 早期持续容量探索（遗留）
 

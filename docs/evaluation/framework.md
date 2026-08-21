@@ -83,7 +83,10 @@ workload 至少覆盖：
 - 长上下文；
 - decode-heavy；
 - 多模态（适用时）；
+- 真实业务 trace 重放（具备业务日志时）；
 - steady、burst 和故障恢复负载。
+
+对应 workload 的具体参数、判定口径与设计理由见 `benchmark/README.md` §4。
 
 ## 5. 容量测试
 
