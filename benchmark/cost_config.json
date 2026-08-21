@@ -1,0 +1,28 @@
+{
+  "_readme": "成本模型与换算标准（framework.md §3.2）。所有价格均为假设值，按实际采购/租赁/电价调整后使用。",
+
+  "gpu_hourly_price_cny": 2.5,
+  "_gpu_hourly_price_cny": "GPU 卡时单价（元/卡时）。换算标准：RTX 4090 48GB 市场租赁价区间约 1.5~3 元/卡时，取中值 2.5。自购卡可按 (购置价+3年维保)/(3年×8760h×目标利用率) 折算。",
+
+  "gpu_count": 1,
+  "_gpu_count": "本部署独占的 GPU 卡数（tp=1 → 1 张）。",
+
+  "electricity_price_per_kwh": 0.8,
+  "_electricity_price_per_kwh": "电价（元/kWh）。换算标准：一般工商业电价约 0.6~1.0 元/kWh，取 0.8。能耗来自 nvidia-smi dmon 功率逐秒积分，非估算。",
+
+  "pue_factor": 1.0,
+  "_pue_factor": "PUE 制冷/供电 overhead 系数，电费乘以该系数。自管单机取 1.0；数据中心典型 1.2~1.4。",
+
+  "shared_infra_hourly_cny": 0.0,
+  "_shared_infra_hourly_cny": "共享基础设施分摊（元/小时）：控制面、网关、存储、网络等。standalone 单机部署无共享组件取 0；进 K8s 后按 (集群控制面月成本/730h/服务实例数) 折算填入。",
+
+  "_cost_dimensions": {
+    "allocated_cost_cny": "分配成本 = gpu_count × 时长(h) × gpu_hourly_price_cny。独占资源应付成本，无论是否跑满。",
+    "usage_cost_cny": "实际使用成本 = 能耗(kWh) × electricity_price_per_kwh × pue_factor。由真实功率积分驱动。",
+    "shared_cost_cny": "共享成本 = shared_infra_hourly_cny × 时长(h)。",
+    "idle_cost_cny": "空闲成本 = 分配成本 × (1 − 时间加权平均 SM 利用率)。为独占资源付了钱但空转的部分，用于容量规划。",
+    "total_cost_cny": "总成本 = 分配 + 实际使用 + 共享。空闲成本是分配成本的构成分析，不重复计入总额。"
+  },
+
+  "_unit_costs": "单位成本 = total_cost / accepted 量。分别给出每 accepted request、每百万 accepted input token、每百万 accepted output token 三个口径（§3.2/§3.3）。"
+}

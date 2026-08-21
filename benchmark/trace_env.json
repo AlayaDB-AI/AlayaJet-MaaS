@@ -1,0 +1,18 @@
+{
+  "ssh": "qiyu@100.64.0.8",
+  "model": "Qwen/Qwen3.8-27B-FP8",
+  "model_path": "~/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B-FP8/snapshots/017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+  "template": "~/trace-run/qwen35-chat-template-dev.jinja",
+  "context": 65536,
+  "port": 30000,
+  "tp": 2,
+  "trace": "benchmark/traces/business-slice-15min.jsonl",
+  "time_scale": 1.0,
+  "server_log": "~/sglang-trace.log",
+  "start_server": "auto",
+  "keep_server": false,
+  "wait_ready_s": 600,
+  "client_timeout_s": 900,
+  "remote_python": "python3",
+  "notes": []
+}
